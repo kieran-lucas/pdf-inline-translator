@@ -1,19 +1,25 @@
 'use strict';
 
 window.LexicalDB = (() => {
-  const CORE_URL = 'dictionaries/en-vi-core.json';
-  const DB_NAME = 'lexical-db';
+  const CORE_URL  = 'dictionaries/en-vi-core.json';
+  const DB_NAME   = 'lexical-db';
   const DB_VERSION = 1;
   const STORE_ENTRIES = 'entries';
-  const STORE_FORMS = 'formIndex';
-  const STORE_META = 'metadata';
+  const STORE_FORMS   = 'formIndex';
+  const STORE_META    = 'metadata';
   const META_FULL_DICT = 'fullDictMeta';
 
-  let initPromise = null;
-  let ready = false;
-  let coreMap = new Map();
-  let coreFormMap = new Map();
-  let dbPromise = null;
+  // Set true to log core load timing to console.
+  const DEBUG_LOAD_PERF = false;
+
+  let initPromise  = null;
+  let ready        = false;
+  let coreLoadMs   = null;   // measured after init completes
+  let coreMap      = new Map();
+  let coreFormMap  = new Map();
+  let dbPromise    = null;
+
+  // ── Normalization helpers ──────────────────────────────────────────────────
 
   function normalizeLookupKey(text) {
     return String(text || '')
@@ -24,41 +30,63 @@ window.LexicalDB = (() => {
   }
 
   function isSingleWord(text) {
-    return /^[\p{L}\p{N}_]+(?:[‘’‘\-‐‑][\p{L}\p{N}_]+)*$/u.test(text);
+    return /^[\p{L}\p{N}_]+(?:['''\-‐‑][\p{L}\p{N}_]+)*$/u.test(text);
   }
 
   function supportsLanguages(sourceLang, targetLang) {
     const src = String(sourceLang || 'auto').toLowerCase();
     const tgt = String(targetLang || 'vi').toLowerCase();
-    return tgt === 'vi' && (src === '' || src === 'auto' || src === 'en' || src === 'eng' || src === 'english');
+    return tgt === 'vi' &&
+      (src === '' || src === 'auto' || src === 'en' || src === 'eng' || src === 'english');
   }
+
+  // ── Core dictionary init ───────────────────────────────────────────────────
 
   async function init() {
     if (initPromise) return initPromise;
     initPromise = (async () => {
+      const t0 = performance.now();
       try {
         const url = chrome.runtime.getURL(CORE_URL);
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Core dictionary HTTP ${response.status}`);
-        const data = await response.json();
+        const t1 = performance.now();
+
+        const data    = await response.json();
         const entries = data?.entries || {};
-        coreMap = new Map();
+        const t2      = performance.now();
+
+        coreMap     = new Map();
         coreFormMap = new Map();
         for (const [key, entry] of Object.entries(entries)) {
           const normalized = normalizeLookupKey(key || entry.lemma);
           if (!normalized) continue;
-          const normalizedEntry = normalizeEntry(entry, normalized);
-          coreMap.set(normalized, normalizedEntry);
-          for (const form of normalizedEntry.forms || []) {
-            const formKey = normalizeLookupKey(form);
-            if (formKey && !coreFormMap.has(formKey)) coreFormMap.set(formKey, normalized);
+          const ne = normalizeEntry(entry, normalized);
+          coreMap.set(normalized, ne);
+          for (const form of ne.forms || []) {
+            const fk = normalizeLookupKey(form);
+            if (fk && !coreFormMap.has(fk)) coreFormMap.set(fk, normalized);
           }
         }
+        const t3  = performance.now();
+        coreLoadMs = Math.round(t3 - t0);
         ready = true;
+
+        if (DEBUG_LOAD_PERF) {
+          console.log(
+            `[LexicalDB] core loaded: ${coreMap.size} entries, ` +
+            `${coreFormMap.size} forms — ` +
+            `fetch ${Math.round(t1 - t0)}ms, ` +
+            `parse ${Math.round(t2 - t1)}ms, ` +
+            `map ${Math.round(t3 - t2)}ms, ` +
+            `total ${coreLoadMs}ms`
+          );
+        }
       } catch (err) {
         ready = false;
-        coreMap = new Map();
+        coreMap     = new Map();
         coreFormMap = new Map();
+        if (DEBUG_LOAD_PERF) console.warn('[LexicalDB] core load failed:', err);
       }
       return ready;
     })();
@@ -67,29 +95,33 @@ window.LexicalDB = (() => {
 
   function normalizeEntry(entry, fallbackLemma) {
     return {
-      lemma: entry.lemma || fallbackLemma,
-      language: entry.language || 'en',
+      lemma:         entry.lemma         || fallbackLemma,
+      language:      entry.language      || 'en',
       frequencyRank: entry.frequencyRank ?? null,
-      forms: Array.isArray(entry.forms) ? entry.forms : [],
-      pos: Array.isArray(entry.pos) ? entry.pos : [],
-      pronunciations: Array.isArray(entry.pronunciations) ? entry.pronunciations : [],
-      senses: Array.isArray(entry.senses) ? entry.senses : [],
-      source: entry.source || {},
-      quality: entry.quality || {},
+      forms:         Array.isArray(entry.forms)         ? entry.forms         : [],
+      pos:           Array.isArray(entry.pos)           ? entry.pos           : [],
+      pronunciations:Array.isArray(entry.pronunciations) ? entry.pronunciations : [],
+      senses:        Array.isArray(entry.senses)        ? entry.senses        : [],
+      source:        entry.source  || {},
+      quality:       entry.quality || {},
     };
   }
 
+  // ── Lemma fallback heuristics ──────────────────────────────────────────────
+
   function safeLemmaFallback(key) {
-    const candidates = [];
-    if (key.endsWith('ies') && key.length > 4) candidates.push(key.slice(0, -3) + 'y');
-    if (key.endsWith('ied') && key.length > 4) candidates.push(key.slice(0, -3) + 'y');
-    if (key.endsWith('ying') && key.length > 5) candidates.push(key.slice(0, -4) + 'ie');
-    if (key.endsWith('ing') && key.length > 5) candidates.push(key.slice(0, -3));
-    if (key.endsWith('ed') && key.length > 4) candidates.push(key.slice(0, -2));
-    if (key.endsWith('es') && key.length > 4) candidates.push(key.slice(0, -2));
-    if (key.endsWith('s') && key.length > 3) candidates.push(key.slice(0, -1));
-    return candidates;
+    const c = [];
+    if (key.endsWith('ies')  && key.length > 4) c.push(key.slice(0, -3) + 'y');
+    if (key.endsWith('ied')  && key.length > 4) c.push(key.slice(0, -3) + 'y');
+    if (key.endsWith('ying') && key.length > 5) c.push(key.slice(0, -4) + 'ie');
+    if (key.endsWith('ing')  && key.length > 5) c.push(key.slice(0, -3));
+    if (key.endsWith('ed')   && key.length > 4) c.push(key.slice(0, -2));
+    if (key.endsWith('es')   && key.length > 4) c.push(key.slice(0, -2));
+    if (key.endsWith('s')    && key.length > 3) c.push(key.slice(0, -1));
+    return c;
   }
+
+  // ── Result helpers ─────────────────────────────────────────────────────────
 
   function getCompactMeaning(entry) {
     const meanings = [];
@@ -109,12 +141,14 @@ window.LexicalDB = (() => {
     return {
       ok: true,
       source,
-      lemma: entry.lemma,
+      lemma:          entry.lemma,
       displayText,
       compactMeaning: getCompactMeaning(entry),
       entry,
     };
   }
+
+  // ── Core lookup (in-memory) ────────────────────────────────────────────────
 
   async function lookupCore(text, options = {}) {
     if (!supportsLanguages(options.sourceLang, options.targetLang)) {
@@ -128,14 +162,20 @@ window.LexicalDB = (() => {
 
     let entry = coreMap.get(key);
     if (entry) return makeResult(entry, 'core-dictionary', displayText);
+
     const formLemma = coreFormMap.get(key);
-    if (formLemma && coreMap.has(formLemma)) return makeResult(coreMap.get(formLemma), 'core-dictionary', displayText);
+    if (formLemma && coreMap.has(formLemma)) {
+      return makeResult(coreMap.get(formLemma), 'core-dictionary', displayText);
+    }
+
     for (const candidate of safeLemmaFallback(key)) {
       entry = coreMap.get(candidate);
       if (entry) return makeResult(entry, 'core-dictionary', displayText);
     }
     return { ok: false, reason: 'not-found' };
   }
+
+  // ── IndexedDB helpers ──────────────────────────────────────────────────────
 
   function openDb() {
     if (dbPromise) return dbPromise;
@@ -154,7 +194,7 @@ window.LexicalDB = (() => {
         }
       };
       req.onsuccess = (event) => resolve(event.target.result);
-      req.onerror = (event) => { dbPromise = null; reject(event.target.error); };
+      req.onerror   = (event) => { dbPromise = null; reject(event.target.error); };
     });
     return dbPromise;
   }
@@ -165,12 +205,14 @@ window.LexicalDB = (() => {
       return await new Promise(resolve => {
         const req = db.transaction(storeName, 'readonly').objectStore(storeName).get(key);
         req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => resolve(null);
+        req.onerror   = () => resolve(null);
       });
     } catch {
       return null;
     }
   }
+
+  // ── Full dictionary lookup (IndexedDB) ─────────────────────────────────────
 
   async function lookupFull(text, options = {}) {
     if (options.allowFullLookup === false) return { ok: false, reason: 'disabled' };
@@ -183,17 +225,21 @@ window.LexicalDB = (() => {
 
     let entry = await idbGet(STORE_ENTRIES, key);
     if (entry) return makeResult(normalizeEntry(entry, key), 'full-dictionary', displayText);
+
     const formRecord = await idbGet(STORE_FORMS, key);
     if (formRecord?.lemma) {
       entry = await idbGet(STORE_ENTRIES, formRecord.lemma);
       if (entry) return makeResult(normalizeEntry(entry, formRecord.lemma), 'full-dictionary', displayText);
     }
+
     for (const candidate of safeLemmaFallback(key)) {
       entry = await idbGet(STORE_ENTRIES, candidate);
       if (entry) return makeResult(normalizeEntry(entry, candidate), 'full-dictionary', displayText);
     }
     return { ok: false, reason: 'not-found' };
   }
+
+  // ── Combined lookup ────────────────────────────────────────────────────────
 
   async function lookupWord(text, options = {}) {
     const core = await lookupCore(text, options);
@@ -202,35 +248,31 @@ window.LexicalDB = (() => {
     return lookupFull(text, options);
   }
 
+  // ── Full dictionary import ─────────────────────────────────────────────────
+
   async function importEntries(entries) {
-    const db = await openDb();
+    const db   = await openDb();
     const list = Array.isArray(entries) ? entries : Object.values(entries || {});
     const stats = { imported: 0, skipped: 0, errors: 0 };
     await new Promise((resolve, reject) => {
-      const tx = db.transaction([STORE_ENTRIES, STORE_FORMS, STORE_META], 'readwrite');
+      const tx         = db.transaction([STORE_ENTRIES, STORE_FORMS, STORE_META], 'readwrite');
       const entryStore = tx.objectStore(STORE_ENTRIES);
-      const formStore = tx.objectStore(STORE_FORMS);
+      const formStore  = tx.objectStore(STORE_FORMS);
       for (const entry of list) {
         const normalized = normalizeLookupKey(entry?.lemma);
-        if (!normalized) {
-          stats.skipped++;
-          continue;
-        }
-        const record = normalizeEntry(entry, normalized);
-        record.lemma = normalized;
+        if (!normalized) { stats.skipped++; continue; }
+        const record   = normalizeEntry(entry, normalized);
+        record.lemma   = normalized;
         entryStore.put(record);
         for (const form of record.forms || []) {
-          const formKey = normalizeLookupKey(form);
-          if (formKey) formStore.put({ form: formKey, lemma: normalized });
+          const fk = normalizeLookupKey(form);
+          if (fk) formStore.put({ form: fk, lemma: normalized });
         }
         stats.imported++;
       }
       tx.objectStore(STORE_META).put({ key: 'updatedAt', value: Date.now() });
       tx.oncomplete = resolve;
-      tx.onerror = (event) => {
-        stats.errors++;
-        reject(event.target.error);
-      };
+      tx.onerror    = (event) => { stats.errors++; reject(event.target.error); };
     });
     return stats;
   }
@@ -252,52 +294,15 @@ window.LexicalDB = (() => {
         const tx = db.transaction(STORE_META, 'readwrite');
         tx.objectStore(STORE_META).put({ key: META_FULL_DICT, ...meta });
         tx.oncomplete = resolve;
-        tx.onerror = (e) => reject(e.target.error);
+        tx.onerror    = (e) => reject(e.target.error);
       });
     } catch { /* non-fatal */ }
   }
 
-  async function getFullDictionaryStats() {
-    try {
-      const meta = await idbGet(STORE_META, META_FULL_DICT);
-      if (!meta) {
-        return { imported: false, importedCount: 0, importedAt: null, sourceFileName: null, sourceFileSize: null };
-      }
-      return {
-        imported: true,
-        importedCount: meta.importedCount || 0,
-        importedAt: meta.importedAt || null,
-        sourceFileName: meta.sourceFileName || null,
-        sourceFileSize: meta.sourceFileSize || null,
-      };
-    } catch {
-      return { imported: false, importedCount: 0, importedAt: null, sourceFileName: null, sourceFileSize: null };
-    }
-  }
-
-  async function clearFullDictionary() {
-    try {
-      const db = await openDb();
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction([STORE_ENTRIES, STORE_FORMS, STORE_META], 'readwrite');
-        tx.objectStore(STORE_ENTRIES).clear();
-        tx.objectStore(STORE_FORMS).clear();
-        const metaStore = tx.objectStore(STORE_META);
-        metaStore.delete(META_FULL_DICT);
-        metaStore.delete('updatedAt');
-        tx.oncomplete = resolve;
-        tx.onerror = (e) => reject(e.target.error);
-      });
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err?.message || String(err) };
-    }
-  }
-
   async function importJsonlText(text, options = {}) {
-    const t0 = Date.now();
+    const t0        = Date.now();
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
-    const batchSize = Math.max(1, options.batchSize || 500);
+    const batchSize  = Math.max(1, options.batchSize || 500);
     const stats = { imported: 0, skipped: 0, errors: 0, elapsedMs: 0 };
     let batch = [];
 
@@ -305,8 +310,8 @@ window.LexicalDB = (() => {
       if (!batch.length) return;
       const result = await importEntries(batch);
       stats.imported += result.imported;
-      stats.skipped += result.skipped;
-      stats.errors += result.errors;
+      stats.skipped  += result.skipped;
+      stats.errors   += result.errors;
       stats.elapsedMs = Date.now() - t0;
       batch = [];
       if (onProgress) onProgress({ ...stats });
@@ -316,12 +321,7 @@ window.LexicalDB = (() => {
     const lines = String(text || '').split(/\r?\n/);
     for (const line of lines) {
       if (!line.trim()) continue;
-      try {
-        batch.push(JSON.parse(line));
-      } catch {
-        stats.errors++;
-        continue;
-      }
+      try { batch.push(JSON.parse(line)); } catch { stats.errors++; continue; }
       if (batch.length >= batchSize) await flush();
     }
     await flush();
@@ -331,9 +331,9 @@ window.LexicalDB = (() => {
 
   async function importJsonlFile(file, options = {}) {
     if (!file) return { imported: 0, skipped: 0, errors: 1, elapsedMs: 0 };
-    const t0 = Date.now();
+    const t0        = Date.now();
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
-    const batchSize = Math.max(1, options.batchSize || 500);
+    const batchSize  = Math.max(1, options.batchSize || 500);
     const stats = { imported: 0, skipped: 0, errors: 0, elapsedMs: 0 };
     let batch = [];
 
@@ -341,8 +341,8 @@ window.LexicalDB = (() => {
       if (!batch.length) return;
       const result = await importEntries(batch);
       stats.imported += result.imported;
-      stats.skipped += result.skipped;
-      stats.errors += result.errors;
+      stats.skipped  += result.skipped;
+      stats.errors   += result.errors;
       stats.elapsedMs = Date.now() - t0;
       batch = [];
       if (onProgress) onProgress({ ...stats });
@@ -350,8 +350,8 @@ window.LexicalDB = (() => {
     }
 
     if (!file.stream || !window.TextDecoderStream) {
-      // Fallback: load into memory when streaming is unavailable
-      const text = await file.text();
+      // Fallback: load into memory when streaming unavailable
+      const text  = await file.text();
       const lines = text.split(/\r?\n/);
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -359,7 +359,7 @@ window.LexicalDB = (() => {
         if (batch.length >= batchSize) await flush();
       }
     } else {
-      // Stream line-by-line — avoids loading the full file into memory
+      // Stream line-by-line — never loads the full file into memory
       const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
       let buffer = '';
       while (true) {
@@ -383,8 +383,8 @@ window.LexicalDB = (() => {
     stats.elapsedMs = Date.now() - t0;
 
     await saveImportMeta({
-      importedAt: Date.now(),
-      importedCount: stats.imported,
+      importedAt:     Date.now(),
+      importedCount:  stats.imported,
       sourceFileName: file.name || '',
       sourceFileSize: file.size || 0,
     });
@@ -392,18 +392,78 @@ window.LexicalDB = (() => {
     return stats;
   }
 
-  function isReady() {
-    return ready;
+  // ── Full dictionary management ─────────────────────────────────────────────
+
+  async function getFullDictionaryStats() {
+    try {
+      const meta = await idbGet(STORE_META, META_FULL_DICT);
+      if (!meta) {
+        return { imported: false, importedCount: 0, importedAt: null, sourceFileName: null, sourceFileSize: null };
+      }
+      return {
+        imported:       true,
+        importedCount:  meta.importedCount  || 0,
+        importedAt:     meta.importedAt     || null,
+        sourceFileName: meta.sourceFileName || null,
+        sourceFileSize: meta.sourceFileSize || null,
+      };
+    } catch {
+      return { imported: false, importedCount: 0, importedAt: null, sourceFileName: null, sourceFileSize: null };
+    }
+  }
+
+  async function clearFullDictionary() {
+    try {
+      const db = await openDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_ENTRIES, STORE_FORMS, STORE_META], 'readwrite');
+        tx.objectStore(STORE_ENTRIES).clear();
+        tx.objectStore(STORE_FORMS).clear();
+        const ms = tx.objectStore(STORE_META);
+        ms.delete(META_FULL_DICT);
+        ms.delete('updatedAt');
+        tx.oncomplete = resolve;
+        tx.onerror    = (e) => reject(e.target.error);
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+
+  // ── Public status ──────────────────────────────────────────────────────────
+
+  function isReady() { return ready; }
+
+  function getCoreStats() {
+    return {
+      ready,
+      entryCount: coreMap.size,
+      formCount:  coreFormMap.size,
+      loadMs:     coreLoadMs,
+    };
   }
 
   function clearRuntimeCache() {
-    initPromise = null;
-    ready = false;
-    coreMap = new Map();
-    coreFormMap = new Map();
+    initPromise  = null;
+    ready        = false;
+    coreLoadMs   = null;
+    coreMap      = new Map();
+    coreFormMap  = new Map();
   }
 
-  init().catch(() => {});
+  // ── Auto-warmup ────────────────────────────────────────────────────────────
+  // Schedule core load after the browser's first idle period so we don't
+  // compete with initial PDF rendering. lookupCore() will trigger init()
+  // immediately on first use regardless of whether warmup has fired yet.
+
+  (function scheduleWarmup() {
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => init().catch(() => {}), { timeout: 2000 });
+    } else {
+      setTimeout(() => init().catch(() => {}), 500);
+    }
+  }());
 
   return {
     init,
@@ -413,6 +473,7 @@ window.LexicalDB = (() => {
     normalizeLookupKey,
     getCompactMeaning,
     isReady,
+    getCoreStats,
     clearRuntimeCache,
     importEntries,
     importJsonlText,

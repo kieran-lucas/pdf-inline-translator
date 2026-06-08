@@ -1,7 +1,7 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
+const fs       = require('fs');
+const path     = require('path');
 const readline = require('readline');
 
 function parseArgs(argv) {
@@ -53,6 +53,8 @@ const KEY_TERMS = [
   'function', 'data', 'system', 'problem', 'method', 'result', 'definition',
   'theorem', 'proof', 'variable', 'equation', 'graph', 'table', 'figure',
   'culture', 'family', 'society', 'history',
+  'analysis', 'algorithm', 'memory', 'cache', 'performance',
+  'translation', 'paragraph', 'sentence', 'word',
 ];
 
 function summarizeEntries(entries, label) {
@@ -60,29 +62,29 @@ function summarizeEntries(entries, label) {
   const summary = {
     label,
     total: entries.length,
-    withVietnameseMeanings: 0,
-    withEnglishDefinitions: 0,
-    withIpa: 0,
-    withArpabet: 0,
-    withPronunciations: 0,
-    withSynonyms: 0,
-    withAntonyms: 0,
-    withForms: 0,
-    averageSensesPerEntry: 0,
-    keyTerms: { present: [], missing: [] },
+    withVietnameseMeanings:  0,
+    withEnglishDefinitions:  0,
+    withIpa:                 0,
+    withArpabet:             0,
+    withPronunciations:      0,
+    withSynonyms:            0,
+    withAntonyms:            0,
+    withForms:               0,
+    averageSensesPerEntry:   0,
+    keyTerms:     { present: [], missing: [] },
     sampleEntries: entries.slice(0, 10).map(e => e.lemma),
     suspiciousEmptyMeanings: [],
   };
 
   let senseCount = 0;
   for (const entry of entries) {
-    if (hasVi(entry)) summary.withVietnameseMeanings++;
+    if (hasVi(entry))         summary.withVietnameseMeanings++;
     if (hasDefinition(entry)) summary.withEnglishDefinitions++;
-    if (hasIpa(entry)) summary.withIpa++;
-    if (hasArpabet(entry)) summary.withArpabet++;
+    if (hasIpa(entry))        summary.withIpa++;
+    if (hasArpabet(entry))    summary.withArpabet++;
     if ((entry.pronunciations || []).length) summary.withPronunciations++;
-    if (hasSynonyms(entry)) summary.withSynonyms++;
-    if (hasAntonyms(entry)) summary.withAntonyms++;
+    if (hasSynonyms(entry))   summary.withSynonyms++;
+    if (hasAntonyms(entry))   summary.withAntonyms++;
     if ((entry.forms || []).length) summary.withForms++;
     senseCount += (entry.senses || []).length;
     if (!hasVi(entry) && summary.suspiciousEmptyMeanings.length < 20) {
@@ -109,21 +111,22 @@ function summarizeEntries(entries, label) {
 
 function readCore(corePath) {
   if (!corePath || !fs.existsSync(corePath)) return { entries: [], fileMeta: {} };
-  const data = JSON.parse(fs.readFileSync(corePath, 'utf8'));
+  const data    = JSON.parse(fs.readFileSync(corePath, 'utf8'));
   const entries = Object.values(data.entries || {});
   const fileMeta = {
-    version: data.version,
-    languagePair: data.languagePair,
-    entryCount: data.entryCount,
-    limit: data.limit,
-    builderVersion: data.builderVersion,
-    generatedAt: data.generatedAt,
+    version:            data.version,
+    languagePair:       data.languagePair,
+    entryCount:         data.entryCount,
+    limit:              data.limit,
+    activeCore:         data.activeCore,
+    builderVersion:     data.builderVersion,
+    generatedAt:        data.generatedAt,
+    optimizationPolicy: data.optimizationPolicy || null,
   };
   return { entries, fileMeta };
 }
 
-// Streams a JSONL file line-by-line to avoid loading 770 MB into memory.
-// Only samples up to `sampleLimit` entries for stats.
+// Stream JSONL file line-by-line — never loads the full 770 MB into memory.
 function readFullStream(fullPath, sampleLimit = 10000) {
   if (!fullPath || !fs.existsSync(fullPath)) {
     return Promise.resolve({ entries: [], totalLines: 0, malformed: 0, sampled: 0 });
@@ -154,7 +157,7 @@ function readFullStream(fullPath, sampleLimit = 10000) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args     = parseArgs(process.argv.slice(2));
   const corePath = args.core ? path.resolve(args.core) : null;
   const fullPath = args.full ? path.resolve(args.full) : null;
 
@@ -169,14 +172,14 @@ async function main() {
         meta: corePath ? coreMeta : null,
       },
       full: {
-        path: fullPath,
-        size: formatBytes(fileSize(fullPath)),
+        path:              fullPath,
+        size:              formatBytes(fileSize(fullPath)),
         totalLinesScanned: fullData.totalLines,
-        sampledEntries: fullData.sampled,
-        malformedLines: fullData.malformed,
+        sampledEntries:    fullData.sampled,
+        malformedLines:    fullData.malformed,
       },
     },
-    core: coreEntries.length ? summarizeEntries(coreEntries, 'core') : null,
+    core:       coreEntries.length ? summarizeEntries(coreEntries, 'core')                              : null,
     fullSample: fullData.entries.length ? summarizeEntries(fullData.entries, `full-sample-${fullData.sampled}`) : null,
   };
 

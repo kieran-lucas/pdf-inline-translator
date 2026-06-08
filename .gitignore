@@ -11,6 +11,9 @@ dictionaries/en-vi-full.generated.jsonl
 dictionaries/en-vi-core.generated.json
 dictionaries/en-vi-core.5000.json
 dictionaries/en-vi-core.8000.json
+dictionaries/en-vi-core.16000.optimized.json
+dictionaries/en-vi-core.8000.active.backup.json
+dictionaries/en-vi-core.seed.backup.json
 tools/dictionary-builder/sources/
 tools/dictionary-builder/tmp/
 tools/dictionary-builder/sources.json

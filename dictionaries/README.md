@@ -1,51 +1,94 @@
 # Offline lexical dictionaries
 
-`en-vi-core.json` is the active bundled seed dictionary. The extension loads it at startup for fast, offline English-to-Vietnamese single-word lookup before any Gemini fallback.
+`en-vi-core.json` is the active bundled dictionary. The extension loads it at startup for fast, offline English-to-Vietnamese single-word lookup before any Gemini fallback.
 
-## Generated Core Workflow
+## Active core
 
-Phase 2 builder output goes to `en-vi-core.generated.json`. The runtime does not automatically prefer this file. Review its size and quality first, then replace or copy it to `en-vi-core.json` when you want to bundle it with the extension.
+**Current active core:** ~16,000 entries (18 MB optimized), covering essentially all English words that have Vietnamese translations in Wiktionary.
 
-Example:
+Why 16k was chosen:
+- 8k covered 19/24 key terms — important academic/CS terms like "science", "theorem", "variable", "table", "society" were missing.
+- 16k covers 32/33 key terms (only "performance" is absent because Wiktionary has no Vietnamese translation for it).
+- 16k gives significantly better coverage for normal PDF reading without approaching the 22 MB size threshold.
+- The full JSONL dictionary (769 MB) covers all remaining words but must be imported manually into IndexedDB.
+
+## Runtime lookup order
+
+1. **Memory L1 cache** — last few translations remembered in-session.
+2. **16k active core** — in-memory Map, loaded from `en-vi-core.json` at startup.
+3. **Full dictionary** — lazy IndexedDB lookup, only if user has imported the JSONL.
+4. **Gemini fallback** — API call, only if enabled in settings.
+
+The extension never downloads dictionary data at runtime and does not require Node.js at runtime.
+
+## Loading performance
+
+The core dictionary loads asynchronously after the first browser idle period (via `requestIdleCallback`), so PDF rendering is never blocked. The first dictionary lookup transparently awaits the init if it hasn't completed yet.
+
+Typical load times (V8 on mid-range hardware):
+- Fetch: ~5–20 ms (extension file system)
+- JSON parse: ~80–200 ms
+- Map build (16k entries + forms): ~20–50 ms
+- Total: ~100–270 ms
+
+Set `DEBUG_LOAD_PERF = true` in `lexical-db.js` to see exact timings in the console.
+
+## Generated core workflow
+
+Builder outputs go to `en-vi-core.generated.json` (27 MB, all ~16k candidates).  
+`extract-core.js` produces the optimized active core (`en-vi-core.16000.optimized.json`, 18 MB) by stripping audio URLs and runtime-unused metadata while keeping all lexical fields.
 
 ```bash
 cd tools/dictionary-builder
-npm run build:sample
-npm run build:all
+
+# Regenerate from Kaikki/WordNet/CMUdict sources:
+npm run build:core
+
+# Re-extract and optimize the active core (fast, reads 27 MB not 3 GB):
+npm run extract:active
+
+# Copy optimized core to active location:
+cp ../../dictionaries/en-vi-core.16000.optimized.json ../../dictionaries/en-vi-core.json
+
+# Audit quality:
+npm run audit:core
 ```
 
-`en-vi-core.generated.json` may be committed only when it is reasonably sized and reviewed.
+## Full dictionary workflow
 
-## Full Dictionary Workflow
+`en-vi-full.generated.jsonl` contains ~1,340,022 entries for IndexedDB import. It is large (769 MB) and stays uncommitted.
 
-`en-vi-full.generated.jsonl` is intended for IndexedDB import, one lexical entry per line. It can include richer English-only entries with definitions, pronunciation, synonyms, antonyms, examples, and collocations. Large full files should usually stay uncommitted and are ignored by default.
+Import via the extension's Settings panel:
+1. Open Settings (⚙ button in toolbar).
+2. Under **Full Offline Dictionary**, choose `en-vi-full.generated.jsonl`.
+3. Click **Import Full Dictionary**.
+4. Progress updates in real time. Import may take several minutes.
 
-Developer import helpers are exposed in the viewer runtime:
-
+Runtime import helpers (also accessible from DevTools console):
 ```js
-await window.LexicalDB.importEntries(entries)
-await window.LexicalDB.importJsonlText(jsonlText)
 await window.LexicalDB.importJsonlFile(file)
+await window.LexicalDB.getFullDictionaryStats()
+await window.LexicalDB.clearFullDictionary()
 ```
 
-Imported entries are stored in the `lexical-db` IndexedDB database with a form index, then found through `lookupFull()`.
+## Source policy
 
-## Runtime Lookup Order
+Recommended builder sources (stored in `tools/dictionary-builder/sources/`, never committed):
+- **Kaikki/Wiktionary** English JSONL — entries, Vietnamese translations, IPA, examples, forms, related terms.
+- **Open English WordNet** — English definitions, synonyms, antonyms, semantic relations.
+- **CMUdict** — US ARPABET pronunciation fallback.
 
-1. In-memory core dictionary from `en-vi-core.json`.
-2. Full dictionary entries previously imported into IndexedDB.
-3. Gemini fallback, only when enabled in settings.
+Do not commit raw source dumps. Do not use StarDict dictionaries unless the license is verified.
 
-The extension never downloads dictionary source data at runtime and does not require Node.js at runtime.
+## Files that are gitignored
 
-## Source Policy
-
-Recommended builder sources:
-
-- Kaikki/Wiktionary extracted English JSONL for entries, Vietnamese translations, IPA, examples, forms, related terms, derived terms, and compounds.
-- Open English WordNet for English definitions, synonyms, antonyms, and semantic relations.
-- CMUdict for US ARPABET pronunciation fallback.
-
-Future fields supported by the entry shape include IPA, audio, definitions, examples, collocations, synonyms, antonyms, forms, source metadata, and quality metadata.
-
-Do not commit raw source dumps. Do not use random StarDict dictionaries unless the license is verified.
+| File | Reason |
+|---|---|
+| `en-vi-full.generated.jsonl` | 769 MB, imported into IndexedDB manually |
+| `en-vi-core.generated.json` | 27 MB intermediate, not directly shipped |
+| `en-vi-core.16000.optimized.json` | 18 MB intermediate, copied to `en-vi-core.json` |
+| `en-vi-core.5000.json`, `en-vi-core.8000.json` | Legacy size variants |
+| `en-vi-core.8000.active.backup.json` | Local backup, not needed in repo |
+| `en-vi-core.seed.backup.json` | Local backup, not needed in repo |
+| `tools/dictionary-builder/sources/` | 3 GB+ raw sources |
+| `tools/dictionary-builder/tmp/` | Temp build outputs |

@@ -2,6 +2,9 @@ en-vi-full.generated.jsonl
 en-vi-core.generated.json
 en-vi-core.5000.json
 en-vi-core.8000.json
+en-vi-core.16000.optimized.json
+en-vi-core.8000.active.backup.json
+en-vi-core.seed.backup.json
 *.dump
 *.raw
 *.bz2

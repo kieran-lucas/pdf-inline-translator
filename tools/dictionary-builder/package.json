@@ -10,7 +10,9 @@
     "build:full": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000",
     "build:all": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --coreOut ../../dictionaries/en-vi-core.generated.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000",
     "extract:cores": "node extract-core.js",
+    "extract:active": "node extract-core.js --input ../../dictionaries/en-vi-core.generated.json --out ../../dictionaries/en-vi-core.16000.optimized.json --optimize-active-core",
     "audit:core": "node audit-generated.js --core ../../dictionaries/en-vi-core.json",
+    "audit:optimized": "node audit-generated.js --core ../../dictionaries/en-vi-core.16000.optimized.json",
     "audit:generated": "node audit-generated.js --core ../../dictionaries/en-vi-core.generated.json --full ../../dictionaries/en-vi-full.generated.jsonl"
   }
 }
