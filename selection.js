@@ -106,12 +106,12 @@
 
   function sourceBadgeLabel(source) {
     if (!source) return null;
-    if (source === 'core' || source === 'core-map')  return 'core';
-    if (source === 'full' || source === 'idb-full')  return 'full dict';
-    if (source === 'gemini')                          return 'Gemini';
-    if (source === 'idb')                             return 'cached';
-    if (source === 'memory')                          return null;
-    return source;
+    if (source === 'core-dictionary') return 'core';
+    if (source === 'full-dictionary') return 'full dict';
+    if (source === 'gemini')          return 'Gemini';
+    if (source === 'idb')             return 'cached';
+    if (source === 'memory')          return null;
+    return null;
   }
 
   // Build the expandable senses section (hidden by default).
@@ -557,7 +557,7 @@
     if (result.ok) {
       setBodyResult(result, text);
     } else {
-      const retryFn = ['timeout', 'network', 'api', 'quota', 'auth'].includes(result.errorType)
+      const retryFn = ['timeout', 'network', 'api', 'quota'].includes(result.errorType)
         ? () => openPopup(text, rect, opts)
         : null;
       setBodyError(result.errorType, result.errorMsg, text, retryFn);

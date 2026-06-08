@@ -324,6 +324,7 @@ body {
   position: fixed;
   z-index: 600;
   width: 450px;
+  max-width: calc(100vw - 20px);
   background: #ffffff;
   border: 1px solid #dbeafe;
   border-radius: 10px;
