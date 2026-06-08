@@ -10,8 +10,6 @@ if (typeof pdfjsLib === 'undefined') {
   throw new Error('pdfjsLib is not defined');
 }
 
-// ── Wire up the PDF.js worker ──────────────────────────────────────────────
-
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -24,12 +22,27 @@ const errorBar     = document.getElementById('error-bar');
 const loadingBar   = document.getElementById('loading-bar');
 const pdfContainer = document.getElementById('pdf-container');
 
-// ── State ──────────────────────────────────────────────────────────────────
+// ── Global state ───────────────────────────────────────────────────────────
 
 let currentLoadingTask = null;
-let currentPdfDoc      = null;   // kept alive so zoom can re-render without reloading
-let currentGeneration  = 0;      // incremented on every new render pass to abort stale work
-let currentZoom        = parseFloat(zoomSelect.value); // mirrors the select, default 1.5
+let currentPdfDoc      = null;
+let currentGeneration  = 0;   // bumped on every new load or zoom change
+let currentZoom        = parseFloat(zoomSelect.value); // default 1.5
+
+// Per-page slot array. slots[0] is unused; slots[1..n] mirror PDF pages.
+// Each slot:
+//   pageDiv         – always in DOM; sized to match page at current zoom
+//   canvas          – null until first render; reused across zoom changes
+//   textLayerDiv    – inside pageDiv, cleared and repopulated each render
+//   naturalW/H      – page size (px) at scale 1.0, cached for instant resize
+//   state           – 'idle' | 'rendering' | 'rendered' | 'error'
+//   activeGeneration – generation of the in-progress or last-completed render
+//   renderedZoom    – zoom used for the completed render (null if never rendered)
+//   activeRenderTask – live PDF.js RenderTask; cancelled on zoom/load change
+const slots = [];
+
+// The single IntersectionObserver; replaced whenever a new document loads.
+let intersectionObserver = null;
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
 
@@ -48,131 +61,274 @@ function setLoading(active) {
   loadingBar.classList.toggle('hidden', !active);
 }
 
-function clearViewer() {
-  if (currentLoadingTask) {
-    currentLoadingTask.destroy().catch(() => {});
-    currentLoadingTask = null;
-  }
-  // Null the doc so a stale zoom handler cannot re-render the old document.
-  currentPdfDoc = null;
-  pdfContainer.innerHTML = '';
-}
+// ── Slot creation ──────────────────────────────────────────────────────────
 
-// ── High-DPI page rendering ────────────────────────────────────────────────
-//
-// Strategy (standard PDF.js high-DPI approach):
-//   1. Get a viewport at the desired CSS scale (currentZoom).
-//   2. Size the canvas in *physical* pixels:  Math.round(viewport.width  * DPR)
-//   3. Display the canvas at *CSS* pixels:     viewport.width  + 'px'
-//   4. Pass a transform = [DPR,0,0,DPR,0,0] to page.render() so PDF.js
-//      draws into the larger canvas without needing a separate hi-DPI viewport.
-//   5. Give the text layer the same CSS-scale viewport so span positions match.
-//
-// This avoids the previous approach of creating two different viewports, which
-// could diverge by fractional pixels and mis-align the text layer.
-
-async function renderPage(page, container, generation) {
-  if (generation !== currentGeneration) return;
-
-  // Use the true device pixel ratio — no artificial cap so quality is never
-  // reduced on high-DPI displays (125 %, 150 %, 175 %, 200 % Windows scaling).
-  const outputScale = window.devicePixelRatio || 1;
-
-  // Single viewport at the chosen zoom level. Used for layout, canvas CSS size,
-  // text-layer positioning, and (via transform) for canvas pixel rendering.
-  const viewport = page.getViewport({ scale: currentZoom });
-
-  // Physical canvas dimensions. Math.round avoids sub-pixel sizing artifacts.
-  const pixelW = Math.round(viewport.width  * outputScale);
-  const pixelH = Math.round(viewport.height * outputScale);
-
-  // ── Page wrapper ──────────────────────────────────────────────────────────
+function createSlot(pageNum, naturalW, naturalH) {
   const pageDiv = document.createElement('div');
-  pageDiv.className    = 'pdf-page';
-  pageDiv.style.width  = viewport.width  + 'px';
-  pageDiv.style.height = viewport.height + 'px';
-  container.appendChild(pageDiv);
+  pageDiv.className      = 'pdf-page';
+  pageDiv.dataset.page   = String(pageNum);
+  pageDiv.style.width    = (naturalW * currentZoom) + 'px';
+  pageDiv.style.height   = (naturalH * currentZoom) + 'px';
 
-  // ── Canvas ────────────────────────────────────────────────────────────────
-  const canvas = document.createElement('canvas');
-  canvas.width        = pixelW;   // physical pixels
-  canvas.height       = pixelH;
-  canvas.style.width  = viewport.width  + 'px'; // CSS display size
-  canvas.style.height = viewport.height + 'px';
-  pageDiv.appendChild(canvas);
-
-  // ── Text layer ────────────────────────────────────────────────────────────
   const textLayerDiv = document.createElement('div');
   textLayerDiv.className = 'textLayer';
   pageDiv.appendChild(textLayerDiv);
 
-  // ── Render canvas ─────────────────────────────────────────────────────────
+  return {
+    pageNum,
+    pageDiv,
+    canvas:           null,
+    textLayerDiv,
+    naturalW,
+    naturalH,
+    state:            'idle',
+    activeGeneration: -1,
+    renderedZoom:     null,
+    activeRenderTask: null,
+  };
+}
+
+// ── Layout builder ─────────────────────────────────────────────────────────
+// Fetches all page viewport sizes (fast – no canvas rendering), creates sized
+// placeholder divs, then wires up the IntersectionObserver.
+
+async function buildLayout(pdfDoc, generation) {
+  pdfContainer.innerHTML = '';
+  slots.length = 0;
+  slots.push(null); // slots[0] intentionally empty
+
+  const n         = pdfDoc.numPages;
+  const BATCH     = 50; // pages fetched in parallel per round
+
+  for (let start = 1; start <= n; start += BATCH) {
+    if (generation !== currentGeneration) return;
+
+    const end   = Math.min(start + BATCH - 1, n);
+    const tasks = [];
+
+    for (let i = start; i <= end; i++) {
+      tasks.push(
+        pdfDoc.getPage(i).then(page => {
+          const vp = page.getViewport({ scale: 1.0 });
+          return { i, naturalW: vp.width, naturalH: vp.height };
+        })
+      );
+    }
+
+    const results = await Promise.all(tasks);
+    if (generation !== currentGeneration) return;
+
+    // Append this batch's placeholder divs to the DOM in one pass.
+    const fragment = document.createDocumentFragment();
+    for (const { i, naturalW, naturalH } of results) {
+      const slot = createSlot(i, naturalW, naturalH);
+      slots[i] = slot;
+      fragment.appendChild(slot.pageDiv);
+    }
+    pdfContainer.appendChild(fragment);
+  }
+
+  if (generation !== currentGeneration) return;
+
+  setLoading(false);
+  setupObserver(generation);
+  // Immediately trigger renders for the pages already on screen.
+  scheduleVisiblePages();
+}
+
+// ── IntersectionObserver ───────────────────────────────────────────────────
+// rootMargin of 1500 px pre-renders roughly one page-height ahead/behind the
+// visible area at typical zoom levels, giving smooth scroll-ahead rendering.
+
+function setupObserver(generation) {
+  teardownObserver();
+
+  intersectionObserver = new IntersectionObserver(
+    (entries) => {
+      if (generation !== currentGeneration) return;
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const pageNum = parseInt(entry.target.dataset.page, 10);
+        if (pageNum) scheduleRender(pageNum);
+      }
+    },
+    { rootMargin: '1500px 0px', threshold: 0 }
+  );
+
+  for (let i = 1; i < slots.length; i++) {
+    if (slots[i]) intersectionObserver.observe(slots[i].pageDiv);
+  }
+}
+
+function teardownObserver() {
+  if (intersectionObserver) {
+    intersectionObserver.disconnect();
+    intersectionObserver = null;
+  }
+}
+
+// ── scheduleRender ─────────────────────────────────────────────────────────
+// Called by the observer and by scheduleVisiblePages().
+// Guards against duplicate or stale renders; cancels any superseded task.
+
+async function scheduleRender(pageNum) {
+  if (!currentPdfDoc) return;
+  const slot = slots[pageNum];
+  if (!slot) return;
+
+  const gen  = currentGeneration;
+  const zoom = currentZoom;
+
+  // Already rendered correctly for this generation + zoom → nothing to do.
+  if (slot.state === 'rendered' &&
+      slot.renderedZoom      === zoom &&
+      slot.activeGeneration  === gen) return;
+
+  // Already rendering for this exact generation → don't start a second task.
+  if (slot.state === 'rendering' && slot.activeGeneration === gen) return;
+
+  // Cancel any previous in-flight render (different zoom or generation).
+  cancelSlotRender(slot);
+
+  slot.state           = 'rendering';
+  slot.activeGeneration = gen;
+
+  try {
+    const page = await currentPdfDoc.getPage(pageNum);
+    // A zoom change may have incremented currentGeneration while we awaited.
+    if (gen !== currentGeneration) return;
+
+    await renderPageIntoSlot(page, slot, zoom, gen);
+
+    if (gen === currentGeneration && zoom === currentZoom) {
+      slot.state        = 'rendered';
+      slot.renderedZoom = zoom;
+    }
+  } catch (err) {
+    if (isCancelError(err)) {
+      // Cancelled intentionally – leave state management to the canceller.
+      return;
+    }
+    if (gen === currentGeneration) {
+      slot.state = 'error';
+      console.error(`Page ${pageNum} render error:`, err);
+    }
+  }
+}
+
+function cancelSlotRender(slot) {
+  if (slot.activeRenderTask) {
+    try { slot.activeRenderTask.cancel(); } catch { /* ignore */ }
+    slot.activeRenderTask = null;
+  }
+}
+
+function isCancelError(err) {
+  return (
+    err?.name === 'RenderingCancelledException' ||
+    (typeof err?.message === 'string' &&
+     (err.message.includes('cancel') || err.message.includes('Cancel')))
+  );
+}
+
+// ── renderPageIntoSlot ─────────────────────────────────────────────────────
+// The actual PDF.js rendering call. Creates or resizes the canvas, applies the
+// hi-DPI transform, then renders the text layer. All expensive work is async
+// so the main thread stays responsive between paint frames.
+
+async function renderPageIntoSlot(page, slot, zoom, generation) {
+  const outputScale = window.devicePixelRatio || 1;
+  const viewport    = page.getViewport({ scale: zoom });
+
+  const pixelW = Math.round(viewport.width  * outputScale);
+  const pixelH = Math.round(viewport.height * outputScale);
+
+  // Keep page div correctly sized (may differ from placeholder if page sizes vary).
+  slot.pageDiv.style.width  = viewport.width  + 'px';
+  slot.pageDiv.style.height = viewport.height + 'px';
+
+  // Reuse the existing canvas element across zoom changes to avoid DOM churn.
+  let { canvas } = slot;
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    slot.canvas = canvas;
+    // Insert before the text layer so the layer sits on top.
+    slot.pageDiv.insertBefore(canvas, slot.textLayerDiv);
+  }
+
+  // Resizing canvas clears its bitmap (spec behaviour) – no explicit clear needed.
+  canvas.width        = pixelW;
+  canvas.height       = pixelH;
+  canvas.style.width  = viewport.width  + 'px';
+  canvas.style.height = viewport.height + 'px';
+
   const ctx = canvas.getContext('2d');
 
-  // The transform scales the 2D context so that every PDF coordinate is
-  // rendered into outputScale × more canvas pixels, giving crisp output on
-  // high-DPI screens without changing the viewport scale or the text layer.
+  // Fill white so the placeholder background doesn't bleed through on resize.
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, pixelW, pixelH);
+
+  // The transform scales the 2D context by outputScale so PDF.js paints at
+  // full device resolution while the viewport stays in CSS-pixel coordinates.
   const renderParams = { canvasContext: ctx, viewport };
   if (outputScale !== 1) {
     renderParams.transform = [outputScale, 0, 0, outputScale, 0, 0];
   }
 
-  await page.render(renderParams).promise;
+  const renderTask      = page.render(renderParams);
+  slot.activeRenderTask = renderTask;
+  try {
+    await renderTask.promise;
+  } finally {
+    // Clear the reference whether or not the task succeeded.
+    if (slot.activeRenderTask === renderTask) slot.activeRenderTask = null;
+  }
 
   if (generation !== currentGeneration) return;
 
-  // ── Render text layer ─────────────────────────────────────────────────────
-  // The text layer uses the same CSS-scale viewport as the canvas display size,
-  // so span positions align exactly with the canvas pixels the user sees.
+  // ── Text layer ────────────────────────────────────────────────────────────
+  // Clear stale spans first, then repopulate using the CSS-scale viewport so
+  // span positions match the canvas pixels the user sees.
+  slot.textLayerDiv.innerHTML = '';
+
   if (typeof pdfjsLib.renderTextLayer === 'function') {
     try {
       const textContent = await page.getTextContent();
       if (generation !== currentGeneration) return;
 
-      const task = pdfjsLib.renderTextLayer({
+      const textTask = pdfjsLib.renderTextLayer({
         textContent,
-        container: textLayerDiv,
-        viewport,     // CSS-scale — matches canvas.style.width/height exactly
+        container: slot.textLayerDiv,
+        viewport,
         textDivs: [],
       });
-      await task.promise;
+      await textTask.promise;
     } catch (err) {
-      // Text layer is non-critical; canvas rendering is already done.
-      console.warn('Text layer render failed on a page:', err);
+      if (!isCancelError(err)) {
+        console.warn(`Text layer error on page ${slot.pageNum}:`, err);
+      }
     }
   }
 
   page.cleanup();
 }
 
-// ── Document render loop ───────────────────────────────────────────────────
-// Shared by initial load and zoom changes. Clears the container first so
-// the new scale's pages replace the old ones cleanly.
+// ── scheduleVisiblePages ───────────────────────────────────────────────────
+// Manually checks which page divs are near the viewport and schedules renders.
+// Needed after zoom changes because IntersectionObserver does not always re-fire
+// for entries that were *already* intersecting before the layout changed.
 
-async function renderDocument(pdfDoc, generation) {
-  pdfContainer.innerHTML = '';
-  setLoading(true);
+function scheduleVisiblePages() {
+  const margin = Math.max(window.innerHeight, 600);
 
-  const n = pdfDoc.numPages;
-  for (let i = 1; i <= n; i++) {
-    if (generation !== currentGeneration) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const page = await pdfDoc.getPage(i);
-      await renderPage(page, pdfContainer, generation);
-    } catch (err) {
-      if (generation !== currentGeneration) { setLoading(false); return; }
-      console.error(`Page ${i} render error:`, err);
-      const errDiv = document.createElement('div');
-      errDiv.className = 'page-error';
-      errDiv.textContent = `Page ${i} failed to render: ${err.message || String(err)}`;
-      pdfContainer.appendChild(errDiv);
+  for (let i = 1; i < slots.length; i++) {
+    const slot = slots[i];
+    if (!slot) continue;
+    const rect = slot.pageDiv.getBoundingClientRect();
+    if (rect.bottom >= -margin && rect.top <= window.innerHeight + margin) {
+      scheduleRender(i);
     }
   }
-
-  if (generation === currentGeneration) setLoading(false);
 }
 
 // ── PDF load orchestrator ──────────────────────────────────────────────────
@@ -180,6 +336,7 @@ async function renderDocument(pdfDoc, generation) {
 async function loadPDF(source) {
   clearError();
   clearViewer();
+  setLoading(true);
 
   const generation = ++currentGeneration;
 
@@ -197,10 +354,28 @@ async function loadPDF(source) {
   }
 
   if (generation !== currentGeneration) return;
-
-  // Keep the document alive so zoom changes can re-render without re-fetching.
   currentPdfDoc = pdfDoc;
-  await renderDocument(pdfDoc, generation);
+
+  // buildLayout shows the loading bar until placeholder divs are ready,
+  // then hides it and fires the observer.
+  await buildLayout(pdfDoc, generation);
+}
+
+function clearViewer() {
+  teardownObserver();
+
+  // Cancel every in-flight render before destroying the document.
+  for (let i = 1; i < slots.length; i++) {
+    if (slots[i]) cancelSlotRender(slots[i]);
+  }
+  slots.length = 0;
+
+  if (currentLoadingTask) {
+    currentLoadingTask.destroy().catch(() => {});
+    currentLoadingTask = null;
+  }
+  currentPdfDoc = null;
+  pdfContainer.innerHTML = '';
 }
 
 // ── Error classification ───────────────────────────────────────────────────
@@ -255,7 +430,7 @@ function handleLoadError(err) {
 
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
-  e.target.value = ''; // allow re-selecting the same file
+  e.target.value = '';
   if (!file) return;
 
   if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
@@ -263,7 +438,7 @@ fileInput.addEventListener('change', (e) => {
     return;
   }
 
-  const reader = new FileReader();
+  const reader   = new FileReader();
   reader.onerror = () => showError('Could not read the file. It may be inaccessible or corrupted.');
   reader.onload  = (ev) => loadPDF({ data: new Uint8Array(ev.target.result) });
   reader.readAsArrayBuffer(file);
@@ -274,10 +449,8 @@ fileInput.addEventListener('change', (e) => {
 function loadFromURL() {
   const raw = urlInput.value.trim();
 
-  if (!raw) {
-    showError('Please enter a PDF URL.');
-    return;
-  }
+  if (!raw) { showError('Please enter a PDF URL.'); return; }
+
   if (raw.startsWith('file://')) {
     showError(
       'file:// URLs cannot be accessed here. ' +
@@ -297,12 +470,50 @@ urlLoadBtn.addEventListener('click', loadFromURL);
 urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFromURL(); });
 
 // ── Zoom ───────────────────────────────────────────────────────────────────
-// Re-render the current document at the new scale. The canvas is destroyed and
-// rebuilt at the correct pixel dimensions — no CSS-scaling tricks.
+// On zoom change:
+//   1. Bump the generation so in-flight renders know they are stale.
+//   2. Cancel every active render task.
+//   3. Reset all slot states and resize their divs using cached natural sizes
+//      (no page re-fetch needed).
+//   4. Re-create the observer with the new generation so stale observer
+//      callbacks are ignored.
+//   5. Manually schedule visible pages, because the observer will not re-fire
+//      for elements that were already intersecting before the resize.
 
-zoomSelect.addEventListener('change', async () => {
+zoomSelect.addEventListener('change', () => {
   currentZoom = parseFloat(zoomSelect.value);
   if (!currentPdfDoc) return;
+
   const generation = ++currentGeneration;
-  await renderDocument(currentPdfDoc, generation);
+
+  for (let i = 1; i < slots.length; i++) {
+    const slot = slots[i];
+    if (!slot) continue;
+
+    cancelSlotRender(slot);
+
+    slot.state           = 'idle';
+    slot.activeGeneration = -1;
+    slot.renderedZoom    = null;
+
+    // Instant resize from cached natural dimensions — no async work needed.
+    slot.pageDiv.style.width  = (slot.naturalW * currentZoom) + 'px';
+    slot.pageDiv.style.height = (slot.naturalH * currentZoom) + 'px';
+
+    // Remove the stale canvas so the grey placeholder background shows while
+    // the page is re-rendering. canvas.remove() is O(1) and non-blocking.
+    if (slot.canvas) {
+      slot.canvas.remove();
+      slot.canvas = null;
+    }
+
+    // Clear stale text layer spans.
+    slot.textLayerDiv.innerHTML = '';
+  }
+
+  // Reconnect with the new generation so old observer callbacks are no-ops.
+  setupObserver(generation);
+
+  // Kick off renders for everything currently on or near the screen.
+  scheduleVisiblePages();
 });

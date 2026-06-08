@@ -202,6 +202,12 @@ body {
   line-height: 0; /* collapse gap under canvas */
 }
 
+/* Pages not yet rendered show a light-grey placeholder so the user can see
+   scroll position without a sea of identical white rectangles. */
+.pdf-page:not(:has(> canvas)) {
+  background: #e0e0e0;
+}
+
 .pdf-page canvas {
   display: block;
 }
