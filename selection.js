@@ -2,14 +2,13 @@
 
 // ── Translation interaction layer ──────────────────────────────────────────
 // Manages the Translate button and inline popup.
-// Self-contained: reads only from the DOM and window.getSelection().
-// Does not call any external translation API in this phase.
+// Calls window.Translator (translator.js) for API access.
 
 (function initSelectionLayer() {
 
   // ── Create UI elements ─────────────────────────────────────────────────────
-  // Both elements live directly on <body> so they are never affected by
-  // pdfContainer clearing (zoom changes, new file loads, etc.).
+  // Both elements live on <body> so they are never affected by pdfContainer
+  // clearing (zoom changes, new file loads).
 
   const txBtn = document.createElement('button');
   txBtn.id        = 'tx-btn';
@@ -29,13 +28,12 @@
       '<span class="tx-source-text"></span>' +
       '<button class="tx-close-btn" aria-label="Close">×</button>' +
     '</div>' +
-    '<div class="tx-body">' +
-      '<p class="tx-result-text">Translation will appear here.</p>' +
-    '</div>';
+    '<div class="tx-body"></div>';
   document.body.appendChild(txPopup);
 
   const txSourceText = txPopup.querySelector('.tx-source-text');
   const txCloseBtn   = txPopup.querySelector('.tx-close-btn');
+  const txBody       = txPopup.querySelector('.tx-body');
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -43,15 +41,19 @@
   // the browser clears the selection when focus moves to the button.
   let pending = null; // { text: string, rect: DOMRect } | null
 
+  // Rect stored when a popup opens; used for re-placement after content loads.
+  let openRect = null;
+
   // ── Visibility helpers ─────────────────────────────────────────────────────
 
-  function hideTxBtn()  { txBtn.classList.add('tx-hidden');   }
-  function hidePopup()  { txPopup.classList.add('tx-hidden'); }
+  function hideTxBtn() { txBtn.classList.add('tx-hidden');   }
+  function hidePopup() { txPopup.classList.add('tx-hidden'); }
 
   function hideAll() {
     hideTxBtn();
     hidePopup();
     pending = null;
+    openRect = null;
   }
 
   // ── Placement ──────────────────────────────────────────────────────────────
@@ -59,45 +61,134 @@
   const GAP  = 8;   // px between the reference rect and the placed element
   const EDGE = 10;  // minimum px gap from any viewport edge
 
-  // Place el (position:fixed) centred horizontally just below refRect,
-  // flipping above if it would overflow the bottom, and clamping to all edges.
-  // We measure el off-screen first; because both the remove-hidden and the
-  // final top/left writes happen in the same synchronous call the browser
-  // batches them into one repaint — the user never sees the element at -9999px.
-  function place(el, refRect) {
-    el.style.top  = '-9999px';
-    el.style.left = '-9999px';
-    el.classList.remove('tx-hidden'); // make it layout-visible for measurement
-
-    const w  = el.offsetWidth;
-    const h  = el.offsetHeight;
+  function computePos(w, h, refRect) {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
-    // Horizontal: centred under the selection, clamped to viewport
     let left = refRect.left + refRect.width / 2 - w / 2;
+    let top  = refRect.bottom + GAP;
 
-    // Vertical: prefer below
-    let top = refRect.bottom + GAP;
-
-    // Flip above if overflowing bottom
     if (top + h > vh - EDGE) {
       const topAbove = refRect.top - GAP - h;
       top = topAbove >= EDGE ? topAbove : Math.max(EDGE, vh - h - EDGE);
     }
 
-    // Clamp all edges
     left = Math.max(EDGE, Math.min(left, vw - w - EDGE));
     top  = Math.max(EDGE, top);
 
-    el.style.top  = Math.round(top)  + 'px';
-    el.style.left = Math.round(left) + 'px';
+    return { top: Math.round(top), left: Math.round(left) };
+  }
+
+  // Off-screen measurement + single-repaint placement (initial show).
+  function place(el, refRect) {
+    el.style.top  = '-9999px';
+    el.style.left = '-9999px';
+    el.classList.remove('tx-hidden');
+    const { top, left } = computePos(el.offsetWidth, el.offsetHeight, refRect);
+    el.style.top  = top  + 'px';
+    el.style.left = left + 'px';
+  }
+
+  // Re-position an already-visible element without the off-screen flash.
+  function rePlace(el, refRect) {
+    const { top, left } = computePos(el.offsetWidth, el.offsetHeight, refRect);
+    el.style.top  = top  + 'px';
+    el.style.left = left + 'px';
+  }
+
+  // ── Popup body helpers ─────────────────────────────────────────────────────
+
+  function googleTranslateUrl(text, settings) {
+    const sl = (settings.sourceLang && settings.sourceLang !== 'auto')
+      ? settings.sourceLang : 'auto';
+    const tl = settings.targetLang || 'vi';
+    return (
+      'https://translate.google.com/?sl=' + encodeURIComponent(sl) +
+      '&tl='   + encodeURIComponent(tl) +
+      '&text=' + encodeURIComponent(text.slice(0, 5000)) +
+      '&op=translate'
+    );
+  }
+
+  function makeFallbackBtn(sourceText, settings) {
+    const btn = document.createElement('button');
+    btn.className   = 'tx-action-btn tx-fallback-btn';
+    btn.textContent = 'Open in Google Translate ↗';
+    btn.addEventListener('click', () => {
+      window.open(googleTranslateUrl(sourceText, settings), '_blank');
+    });
+    return btn;
+  }
+
+  function setBodyLoading() {
+    txBody.innerHTML =
+      '<div class="tx-loading">' +
+        '<div class="tx-spinner"></div>' +
+        '<span>Translating…</span>' +
+      '</div>';
+  }
+
+  function setBodyResult(translated, sourceText, settings) {
+    txBody.innerHTML = '';
+
+    const p = document.createElement('p');
+    p.className   = 'tx-result-text';
+    p.textContent = translated;
+    txBody.appendChild(p);
+
+    const actions = document.createElement('div');
+    actions.className = 'tx-actions';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className   = 'tx-action-btn tx-copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(translated).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy'; }, 1500);
+      }).catch(() => {});
+    });
+
+    actions.appendChild(copyBtn);
+    actions.appendChild(makeFallbackBtn(sourceText, settings));
+    txBody.appendChild(actions);
+  }
+
+  function setBodyError(errorType, errorMsg, sourceText, settings) {
+    txBody.innerHTML = '';
+
+    if (errorType === 'no-key') {
+      const msg = document.createElement('p');
+      msg.className   = 'tx-error-text';
+      msg.textContent = 'No API key configured. Add your Google Cloud API key in Settings.';
+      txBody.appendChild(msg);
+
+      const openSettingsBtn = document.createElement('button');
+      openSettingsBtn.className   = 'tx-action-btn tx-open-settings-btn';
+      openSettingsBtn.textContent = '⚙ Open Settings';
+      openSettingsBtn.addEventListener('click', () => {
+        hideAll();
+        const settingsPanel  = document.getElementById('settings-panel');
+        const settingsToggle = document.getElementById('settings-toggle');
+        if (settingsToggle && settingsPanel && !settingsPanel.classList.contains('settings-open')) {
+          settingsToggle.click();
+        }
+      });
+      txBody.appendChild(openSettingsBtn);
+    } else {
+      const msg = document.createElement('p');
+      msg.className   = 'tx-error-text';
+      msg.textContent = errorMsg;
+      txBody.appendChild(msg);
+    }
+
+    txBody.appendChild(makeFallbackBtn(sourceText, settings));
   }
 
   // ── Selection helper ───────────────────────────────────────────────────────
 
-  // Returns { text, rect } when the browser selection is non-empty and
-  // originates inside a .textLayer element; null otherwise.
+  // Returns { text, rect } when the selection is non-empty and inside a
+  // .textLayer element; null otherwise.
   function getLayerSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return null;
@@ -114,7 +205,6 @@
     if (!node || !node.closest('.textLayer')) return null;
 
     const rect = range.getBoundingClientRect();
-    // Degenerate rects happen with out-of-view or collapsed ranges.
     if (!rect || (rect.width === 0 && rect.height === 0)) return null;
 
     return { text, rect };
@@ -123,14 +213,12 @@
   // ── Pointer-down: dismiss stale UI before any new gesture ─────────────────
 
   document.addEventListener('pointerdown', (e) => {
-    // Preserve our own UI so the translate button can be clicked.
     if (e.target.closest('#tx-btn') || e.target.closest('#tx-popup')) return;
     hideAll();
   });
 
   // ── Mouse-up: show translate button after a drag-selection ────────────────
-  // Selection is finalised by mouseup time (unlike dblclick where the word
-  // selection is committed after the event), so no setTimeout is needed here.
+  // Selection is finalised by mouseup time, so no setTimeout is needed.
 
   document.addEventListener('mouseup', (e) => {
     if (e.target.closest('#tx-btn') || e.target.closest('#tx-popup')) return;
@@ -142,7 +230,7 @@
     place(txBtn, result.rect);
   });
 
-  // ── Translate button click → open popup ───────────────────────────────────
+  // ── Translate button click → open popup and translate ─────────────────────
 
   txBtn.addEventListener('click', () => {
     if (!pending) { hideTxBtn(); return; }
@@ -153,7 +241,7 @@
     openPopup(text, rect);
   });
 
-  // ── Close button ───────────────────────────────────────────────────────────
+  // ── Close button ──────────────────────────────────────────────────────────
 
   txCloseBtn.addEventListener('click', () => hideAll());
 
@@ -163,35 +251,67 @@
     if (e.key === 'Escape') hideAll();
   });
 
-  // ── Popup display ──────────────────────────────────────────────────────────
+  // ── Popup display and translation ─────────────────────────────────────────
 
-  const MAX_PREVIEW = 120; // characters shown in the popup header
+  const MAX_PREVIEW = 120;
 
-  function openPopup(text, rect) {
+  async function openPopup(text, rect) {
+    openRect = rect;
+
     const preview = text.length > MAX_PREVIEW
       ? text.slice(0, MAX_PREVIEW).trimEnd() + '…'
       : text;
-
     txSourceText.textContent = preview;
 
-    // Ensure popup is hidden before placement so the old position doesn't
-    // flash while we're measuring.
+    // Fast pre-check for length: avoid loading state for a purely local error.
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (normalized.length > window.Translator.MAX_CHARS) {
+      txBody.innerHTML = '';
+      const msg = document.createElement('p');
+      msg.className   = 'tx-error-text';
+      msg.textContent =
+        `Selection is too long (${normalized.length} / ` +
+        `${window.Translator.MAX_CHARS} chars). Shorten your selection to translate inline.`;
+      txBody.appendChild(msg);
+      const settings = await window.Translator.loadSettings();
+      txBody.appendChild(makeFallbackBtn(text, settings));
+      hidePopup();
+      place(txPopup, rect);
+      return;
+    }
+
+    // Show loading state immediately, then fire the API call.
+    setBodyLoading();
     hidePopup();
     place(txPopup, rect);
+
+    const result = await window.Translator.translate(text);
+
+    // User may have closed the popup while the request was in flight.
+    if (txPopup.classList.contains('tx-hidden')) return;
+
+    if (result.ok) {
+      setBodyResult(result.translated, text, result.settings);
+    } else {
+      setBodyError(result.errorType, result.errorMsg, text, result.settings);
+    }
+
+    // Re-position now that the popup height has changed with the new content.
+    if (openRect && !txPopup.classList.contains('tx-hidden')) {
+      rePlace(txPopup, openRect);
+    }
   }
 
   // ── Double-click: select word and show popup directly ─────────────────────
-  // The browser commits the word-selection AFTER dblclick fires, so we use
-  // setTimeout(0) to read the finalised selection on the next event loop tick.
+  // The browser commits word-selection AFTER dblclick fires, so setTimeout(0)
+  // reads the finalised selection on the next event loop tick.
 
   document.addEventListener('dblclick', (e) => {
     const span = e.target.closest('.textLayer span');
     if (!span) return;
 
-    // Prevent the mouseup handler (fires before dblclick) from showing the
-    // translate button for whatever partial selection exists at that moment —
-    // the dblclick handler will take over on the next tick.
-    // We clear pending here; if mouseup showed a button it will be gone.
+    // Cancel any translate button the mouseup handler may have shown for the
+    // partial selection from the second mouseup before dblclick fired.
     hideTxBtn();
     pending = null;
 
@@ -199,17 +319,14 @@
       let text = null;
       let rect = null;
 
-      // Primary: use the browser's word selection
       const result = getLayerSelection();
       if (result) {
         text = result.text;
         rect = result.rect;
       }
 
-      // Fallback: use the clicked span's full text content.
-      // This covers cases where the browser didn't select a word (e.g.
-      // single-character spans, punctuation spans, or transformed text
-      // where dblclick word-selection doesn't fire correctly).
+      // Fallback: use the clicked span's text when the browser didn't produce
+      // a word selection (single-char spans, punctuation, transformed text).
       if (!text) {
         const spanText = span.textContent.trim();
         if (spanText) {
@@ -220,7 +337,6 @@
 
       if (!text || !rect) return;
 
-      // No translate button for double-click — open the popup directly.
       openPopup(text, rect);
     }, 0);
   });

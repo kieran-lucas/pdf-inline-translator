@@ -38,6 +38,68 @@
         <button id="url-load" class="btn">Load URL</button>
       </div>
     </div>
+
+    <button
+      id="settings-toggle"
+      class="btn settings-toggle-btn"
+      aria-label="Translation settings"
+      aria-expanded="false"
+      data-has-key="0"
+      title="Translation settings — no API key"
+    >⚙</button>
+  </div>
+
+  <!-- Settings panel — collapsed by default, toggled by #settings-toggle -->
+  <div id="settings-panel" role="region" aria-label="Translation settings">
+    <div class="settings-inner">
+      <h2 class="settings-heading">Translation Settings</h2>
+
+      <div class="settings-row">
+        <label for="settings-api-key" class="settings-label">
+          Google Cloud API Key
+        </label>
+        <input
+          type="password"
+          id="settings-api-key"
+          class="settings-input"
+          placeholder="Paste your key here"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+
+      <div class="settings-row settings-row-inline">
+        <div class="settings-lang-group">
+          <label for="settings-target-lang" class="settings-label">Target language</label>
+          <input
+            type="text"
+            id="settings-target-lang"
+            class="settings-input settings-lang-input"
+            placeholder="vi"
+            maxlength="10"
+            spellcheck="false"
+          >
+        </div>
+        <div class="settings-lang-group">
+          <label for="settings-source-lang" class="settings-label">Source language (blank = auto)</label>
+          <input
+            type="text"
+            id="settings-source-lang"
+            class="settings-input settings-lang-input"
+            placeholder="auto"
+            maxlength="10"
+            spellcheck="false"
+          >
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button id="settings-save" class="btn">Save</button>
+        <button id="settings-clear" class="btn settings-clear-btn">Clear Key</button>
+      </div>
+
+      <p id="settings-status" class="settings-status"></p>
+    </div>
   </div>
 
   <div id="error-bar" class="hidden" role="alert" aria-live="assertive"></div>
@@ -47,6 +109,8 @@
 
   <script src="lib/pdf.min.js"></script>
   <script src="viewer.js"></script>
+  <script src="translator.js"></script>
+  <script src="settings.js"></script>
   <script src="selection.js"></script>
 </body>
 </html>
