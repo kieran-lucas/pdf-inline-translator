@@ -213,17 +213,30 @@ body {
 }
 
 /* ── Text layer (transparent, selectable) ─────────────────────────────────── */
+/*
+ * PDF.js 3.11.x positions every span and sizes the layer using the CSS
+ * variable --scale-factor (set to viewport.scale by viewer.js at render time).
+ * The rules below match the official PDF.js text_layer.css for this version.
+ */
 
 .textLayer {
   position: absolute;
+  /* inset:0 anchors the layer at the page origin; explicit width/height are
+     set by PDF.js's setLayerDimensions() via calc(var(--scale-factor)*Npx). */
   inset: 0;
   overflow: hidden;
+  opacity: 1;
   line-height: 1;
+  /* Prevent mobile browsers from auto-inflating font sizes, which would
+     misalign text layer spans with the canvas rendering. */
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
   /* Reset font-family so Lexend does not cascade into the text layer.
-     PDF.js sets inline font-family on every span based on the PDF's own fonts;
-     if any span is missing an inline value, 'initial' gives the browser default
-     rather than Lexend — keeping selection geometry aligned with the canvas. */
+     PDF.js sets inline font-family on every span from the PDF's embedded
+     fonts; 'initial' (browser default) is the correct fallback here. */
   font-family: initial;
+  /* Ensure no inherited transform or zoom shifts the layer origin. */
+  transform-origin: 0 0;
 }
 
 .textLayer span,
@@ -232,8 +245,22 @@ body {
   position: absolute;
   white-space: pre;
   cursor: text;
+  /* PDF.js applies scaleX() and rotate() transforms anchored at 0% 0%. */
   transform-origin: 0% 0%;
   user-select: text;
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer .endOfContent.active {
+  top: 0;
 }
 
 .textLayer ::selection {

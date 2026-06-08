@@ -12,6 +12,9 @@ if (typeof pdfjsLib === 'undefined') {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
 
+// Set DEBUG_RENDER = true to outline pageDiv / canvas / textLayer for alignment checking.
+const DEBUG_RENDER = false;
+
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
 const fileInput    = document.getElementById('file-input');
@@ -67,12 +70,19 @@ function createSlot(pageNum, naturalW, naturalH) {
   const pageDiv = document.createElement('div');
   pageDiv.className      = 'pdf-page';
   pageDiv.dataset.page   = String(pageNum);
-  pageDiv.style.width    = (naturalW * currentZoom) + 'px';
-  pageDiv.style.height   = (naturalH * currentZoom) + 'px';
+  // Round to integer CSS pixels: avoids sub-pixel gaps between pageDiv,
+  // canvas, and the text layer (which uses CSS round() with --scale-factor).
+  pageDiv.style.width    = Math.round(naturalW * currentZoom) + 'px';
+  pageDiv.style.height   = Math.round(naturalH * currentZoom) + 'px';
 
   const textLayerDiv = document.createElement('div');
   textLayerDiv.className = 'textLayer';
   pageDiv.appendChild(textLayerDiv);
+
+  if (DEBUG_RENDER) {
+    pageDiv.style.outline      = '2px solid red';
+    textLayerDiv.style.outline = '2px solid blue';
+  }
 
   return {
     pageNum,
@@ -232,26 +242,41 @@ function isCancelError(err) {
 }
 
 // ── renderPageIntoSlot ─────────────────────────────────────────────────────
-// The actual PDF.js rendering call. Creates or resizes the canvas, applies the
-// hi-DPI transform, then renders the text layer. All expensive work is async
-// so the main thread stays responsive between paint frames.
+// Renders the canvas at full device resolution then builds the text layer.
+//
+// Canvas sizing:
+//   Physical canvas pixels = round(viewport CSS px * DPR)
+//   Canvas CSS size        = round(viewport CSS px)   ← integer to avoid blur
+//   pageDiv CSS size       = same as canvas CSS size
+//
+// Text layer (PDF.js 3.11.x):
+//   PDF.js uses --scale-factor CSS variable to size the layer container and to
+//   compute span font-sizes as calc(var(--scale-factor)*Npx).  Without it, all
+//   font-sizes evaluate to 0, measureText() returns 0, scaleX becomes NaN, and
+//   every span renders at the wrong width — causing visible misalignment with
+//   the canvas.  Setting --scale-factor = viewport.scale fixes all of this.
 
 async function renderPageIntoSlot(page, slot, zoom, generation) {
   const outputScale = window.devicePixelRatio || 1;
   const viewport    = page.getViewport({ scale: zoom });
 
+  // Integer CSS pixel dimensions — prevents sub-pixel mismatch between the
+  // pageDiv, canvas, and the text layer (which applies CSS round() internally).
+  const cssW   = Math.round(viewport.width);
+  const cssH   = Math.round(viewport.height);
   const pixelW = Math.round(viewport.width  * outputScale);
   const pixelH = Math.round(viewport.height * outputScale);
 
   // Keep page div correctly sized (may differ from placeholder if page sizes vary).
-  slot.pageDiv.style.width  = viewport.width  + 'px';
-  slot.pageDiv.style.height = viewport.height + 'px';
+  slot.pageDiv.style.width  = cssW + 'px';
+  slot.pageDiv.style.height = cssH + 'px';
 
   // Reuse the existing canvas element across zoom changes to avoid DOM churn.
   let { canvas } = slot;
   if (!canvas) {
     canvas = document.createElement('canvas');
     slot.canvas = canvas;
+    if (DEBUG_RENDER) canvas.style.outline = '1px solid green';
     // Insert before the text layer so the layer sits on top.
     slot.pageDiv.insertBefore(canvas, slot.textLayerDiv);
   }
@@ -259,8 +284,8 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
   // Resizing canvas clears its bitmap (spec behaviour) – no explicit clear needed.
   canvas.width        = pixelW;
   canvas.height       = pixelH;
-  canvas.style.width  = viewport.width  + 'px';
-  canvas.style.height = viewport.height + 'px';
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
 
   const ctx = canvas.getContext('2d');
 
@@ -287,20 +312,25 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
   if (generation !== currentGeneration) return;
 
   // ── Text layer ────────────────────────────────────────────────────────────
-  // Clear stale spans first, then repopulate using the CSS-scale viewport so
-  // span positions match the canvas pixels the user sees.
+  // Clear stale content from a previous render (different zoom / generation).
   slot.textLayerDiv.innerHTML = '';
+
+  // CRITICAL: PDF.js 3.11.x evaluates span positions and font-sizes as
+  // calc(var(--scale-factor) * Npx).  The constructor of TextLayerRenderTask
+  // also calls setLayerDimensions() which sizes the container via the same
+  // variable.  Set it to viewport.scale (= zoom) before calling renderTextLayer
+  // so the CSS engine resolves all calc() expressions correctly.
+  slot.textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
 
   if (typeof pdfjsLib.renderTextLayer === 'function') {
     try {
-      const textContent = await page.getTextContent();
-      if (generation !== currentGeneration) return;
-
+      // Use streamTextContent() (ReadableStream) so renderTextLayer reads text
+      // items incrementally without a separate pre-await.  Pass viewport — the
+      // same object used for the canvas — so span positions align with pixels.
       const textTask = pdfjsLib.renderTextLayer({
-        textContent,
-        container: slot.textLayerDiv,
+        textContentSource: page.streamTextContent(),
+        container:         slot.textLayerDiv,
         viewport,
-        textDivs: [],
       });
       await textTask.promise;
     } catch (err) {
@@ -497,8 +527,9 @@ zoomSelect.addEventListener('change', () => {
     slot.renderedZoom    = null;
 
     // Instant resize from cached natural dimensions — no async work needed.
-    slot.pageDiv.style.width  = (slot.naturalW * currentZoom) + 'px';
-    slot.pageDiv.style.height = (slot.naturalH * currentZoom) + 'px';
+    // Round to integer CSS pixels to stay consistent with renderPageIntoSlot.
+    slot.pageDiv.style.width  = Math.round(slot.naturalW * currentZoom) + 'px';
+    slot.pageDiv.style.height = Math.round(slot.naturalH * currentZoom) + 'px';
 
     // Remove the stale canvas so the grey placeholder background shows while
     // the page is re-rendering. canvas.remove() is O(1) and non-blocking.
@@ -507,8 +538,9 @@ zoomSelect.addEventListener('change', () => {
       slot.canvas = null;
     }
 
-    // Clear stale text layer spans.
+    // Clear stale text layer spans and the stale --scale-factor.
     slot.textLayerDiv.innerHTML = '';
+    slot.textLayerDiv.style.removeProperty('--scale-factor');
   }
 
   // Reconnect with the new generation so old observer callbacks are no-ops.
