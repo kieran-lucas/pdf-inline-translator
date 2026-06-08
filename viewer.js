@@ -324,11 +324,16 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
 
   if (typeof pdfjsLib.renderTextLayer === 'function') {
     try {
-      // Use streamTextContent() (ReadableStream) so renderTextLayer reads text
-      // items incrementally without a separate pre-await.  Pass viewport — the
-      // same object used for the canvas — so span positions align with pixels.
+      // Await getTextContent() first so renderTextLayer uses the synchronous
+      // (non-stream) internal path: all spans are created and laid out in one
+      // synchronous batch with no async gaps.  Using streamTextContent() instead
+      // would introduce an async race where a zoom change could cause the old
+      // task to append stale spans into the div alongside the new render's spans.
+      const textContent = await page.getTextContent();
+      if (generation !== currentGeneration) return;
+
       const textTask = pdfjsLib.renderTextLayer({
-        textContentSource: page.streamTextContent(),
+        textContentSource: textContent,   // direct TextContent object → sync path
         container:         slot.textLayerDiv,
         viewport,
       });
