@@ -276,7 +276,7 @@
       const msg = document.createElement('p');
       msg.className   = 'tx-error-text';
       msg.textContent =
-        `Selection is too long (${normalized.length} / ` +
+        `Selection is too long (${normalized.length} / ` +
         `${window.Translator.MAX_CHARS} chars). Shorten your selection to translate inline.`;
       txBody.appendChild(msg);
       const settings = await window.Translator.loadSettings();
@@ -312,42 +312,261 @@
     }
   }
 
+  // ── Word-detection helpers (used by double-click) ─────────────────────────
+
+  function isBaseWordChar(ch) {
+    // Unicode letters, digits, and underscore
+    return /[\p{L}\p{N}_]/u.test(ch);
+  }
+
+  function isJoinerChar(ch) {
+    // Straight apostrophe, right/left single quote, hyphen-minus,
+    // non-breaking hyphen, figure dash — joiners inside words
+    return ch === "'" || ch === '’' || ch === '‘' ||
+           ch === '-' || ch === '‐' || ch === '‑';
+  }
+
+  // A joiner at str[idx] is part of a word only when flanked by word chars
+  // (e.g. "don't", "well-known") — prevents leading/trailing hyphens.
+  function shouldIncludeJoiner(str, idx) {
+    return idx > 0 && idx < str.length - 1 &&
+           isBaseWordChar(str[idx - 1]) && isBaseWordChar(str[idx + 1]);
+  }
+
+  // Expand from str[idx] to word boundaries; returns [start, end) offsets.
+  function expandWordInString(str, idx) {
+    if (!str || str.length === 0) return { start: 0, end: 0 };
+    const safeIdx = Math.max(0, Math.min(idx, str.length - 1));
+
+    let start = safeIdx;
+    let end   = safeIdx;
+
+    while (start > 0) {
+      const c = str[start - 1];
+      if (isBaseWordChar(c) || (isJoinerChar(c) && shouldIncludeJoiner(str, start - 1))) {
+        start--;
+      } else break;
+    }
+
+    while (end < str.length) {
+      const c = str[end];
+      if (isBaseWordChar(c) || (isJoinerChar(c) && shouldIncludeJoiner(str, end))) {
+        end++;
+      } else break;
+    }
+
+    // Strip any leading/trailing joiners that slipped through
+    while (start < end && isJoinerChar(str[start]))   start++;
+    while (end > start && isJoinerChar(str[end - 1])) end--;
+
+    return { start, end };
+  }
+
+  // Cross-browser caret range at a viewport point
+  function getCaretRangeFromPoint(x, y) {
+    if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(x, y);
+      if (!pos) return null;
+      const r = document.createRange();
+      r.setStart(pos.offsetNode, pos.offset);
+      r.collapse(true);
+      return r;
+    }
+    return null;
+  }
+
+  // Apply a Range as the current window selection (for visual highlight)
+  function selectRange(range) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // ── Strategy A — native browser double-click selection ────────────────────
+  // The browser selects a token after dblclick; accept it only when it looks
+  // like a clean single word (no embedded whitespace, short enough).
+
+  function getNativeDoubleClickSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return null;
+    const text = sel.toString().trim();
+    if (!text) return null;
+    const range  = sel.getRangeAt(0);
+    const anchor = range.commonAncestorContainer;
+    const node   = anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor;
+    if (!node || !node.closest('.textLayer')) return null;
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+    return { text, rect };
+  }
+
+  function isGoodDoubleClickSelection(text, rect) {
+    if (!text || text.length > 80) return false;
+    if (/\s/.test(text)) return false; // multi-word or contains spaces → skip
+    if (!rect || (rect.width === 0 && rect.height === 0)) return false;
+    return true;
+  }
+
+  // ── Strategy B — caret position → word expansion within one text node ─────
+  // Returns { text, rect, atBoundary } or null.
+  // atBoundary=true means the word may continue into a neighbouring span.
+
+  function getWordFromPoint(clientX, clientY) {
+    const caretRange = getCaretRangeFromPoint(clientX, clientY);
+    if (!caretRange) return null;
+
+    const node = caretRange.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE) return null;
+    if (!node.parentElement || !node.parentElement.closest('.textLayer')) return null;
+
+    const str    = node.textContent;
+    const offset = caretRange.startOffset;
+    const { start, end } = expandWordInString(str, offset);
+    if (start >= end) return null;
+
+    const wordText = str.slice(start, end).trim();
+    if (!wordText) return null;
+
+    try {
+      const wordRange = document.createRange();
+      wordRange.setStart(node, start);
+      wordRange.setEnd(node, end);
+      selectRange(wordRange);
+      const rect = wordRange.getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+      // Word touches a span edge → likely truncated by PDF.js span split
+      const atBoundary = (start === 0 || end === str.length);
+      return { text: wordText, rect, atBoundary };
+    } catch (_) { return null; }
+  }
+
+  // ── Strategy C — same-line multi-span reconstruction ─────────────────────
+  // PDF.js sometimes splits a single word across adjacent spans (kerning,
+  // font changes). This strategy collects all spans on the same visual line,
+  // builds a character map with approximate x-centres, finds the character
+  // nearest to the click, expands to word boundaries across span borders,
+  // then reconstructs a DOM Range spanning however many spans are needed.
+
+  function getWordFromSpanLine(clickedSpan, clientX) {
+    const textLayer = clickedSpan.closest('.textLayer');
+    if (!textLayer) return null;
+
+    const cr = clickedSpan.getBoundingClientRect();
+    if (!cr || cr.height === 0) return null;
+
+    // Gather spans whose vertical midpoint overlaps this line (±35 % of height)
+    const tol = cr.height * 0.35;
+    const lineSpans = Array.from(textLayer.querySelectorAll('span')).filter(s => {
+      const r = s.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 &&
+             r.top  < cr.bottom - tol &&
+             r.bottom > cr.top   + tol;
+    });
+
+    // Sort left-to-right
+    lineSpans.sort((a, b) =>
+      a.getBoundingClientRect().left - b.getBoundingClientRect().left
+    );
+
+    // Build per-character position map (uniform-width approximation per span)
+    const charMap = [];
+    for (const s of lineSpans) {
+      const txt = s.textContent;
+      if (!txt.length) continue;
+      const r  = s.getBoundingClientRect();
+      const cw = r.width / txt.length;
+      for (let i = 0; i < txt.length; i++) {
+        charMap.push({ span: s, offset: i, ch: txt[i], xMid: r.left + (i + 0.5) * cw });
+      }
+    }
+    if (!charMap.length) return null;
+
+    // Find the character whose centre is closest to the click x
+    let nearestIdx = 0;
+    let minDist    = Infinity;
+    for (let i = 0; i < charMap.length; i++) {
+      const d = Math.abs(charMap[i].xMid - clientX);
+      if (d < minDist) { minDist = d; nearestIdx = i; }
+    }
+
+    const fullStr = charMap.map(c => c.ch).join('');
+    const { start, end } = expandWordInString(fullStr, nearestIdx);
+    if (start >= end) return null;
+
+    const wordText = fullStr.slice(start, end).trim();
+    if (!wordText) return null;
+
+    const s0 = charMap[start];
+    const s1 = charMap[end - 1];
+    try {
+      const tn0 = s0.span.firstChild;
+      const tn1 = s1.span.firstChild;
+      if (!tn0 || !tn1 ||
+          tn0.nodeType !== Node.TEXT_NODE ||
+          tn1.nodeType !== Node.TEXT_NODE) return null;
+
+      const wordRange = document.createRange();
+      wordRange.setStart(tn0, s0.offset);
+      wordRange.setEnd(tn1, s1.offset + 1);
+      selectRange(wordRange);
+
+      const rect = wordRange.getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+      return { text: wordText, rect };
+    } catch (_) { return null; }
+  }
+
   // ── Double-click: select word and show popup directly ─────────────────────
-  // The browser commits word-selection AFTER dblclick fires, so setTimeout(0)
-  // reads the finalised selection on the next event loop tick.
+  // Strategy A → B → C waterfall; each strategy falls through if it cannot
+  // produce a clean result. The browser commits the word selection AFTER
+  // dblclick fires, so setTimeout(0) reads the finalised state.
 
   document.addEventListener('dblclick', (e) => {
     const span = e.target.closest('.textLayer span');
     if (!span) return;
 
-    // Cancel any translate button the mouseup handler may have shown for the
-    // partial selection from the second mouseup before dblclick fired.
+    // Cancel any translate button that mouseup may have shown for the partial
+    // selection produced by the second mouseup before dblclick fired.
     hideTxBtn();
     pending = null;
 
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+
     setTimeout(() => {
-      let text = null;
-      let rect = null;
-
-      const result = getLayerSelection();
-      if (result) {
-        text = result.text;
-        rect = result.rect;
+      // Strategy A — accept the native browser selection when it is clean
+      const nativeSel = getNativeDoubleClickSelection();
+      if (nativeSel && isGoodDoubleClickSelection(nativeSel.text, nativeSel.rect)) {
+        openPopup(nativeSel.text, nativeSel.rect);
+        return;
       }
 
-      // Fallback: use the clicked span's text when the browser didn't produce
-      // a word selection (single-char spans, punctuation, transformed text).
-      if (!text) {
-        const spanText = span.textContent.trim();
-        if (spanText) {
-          text = spanText;
-          rect = span.getBoundingClientRect();
-        }
+      // Strategy B — caret-based expansion within a single text node
+      const bResult = getWordFromPoint(clientX, clientY);
+      if (bResult && !bResult.atBoundary) {
+        // Word is fully inside one span; use it directly
+        openPopup(bResult.text, bResult.rect);
+        return;
       }
 
-      if (!text || !rect) return;
+      // Strategy C — multi-span line reconstruction for split words
+      const cResult = getWordFromSpanLine(span, clientX);
+      if (cResult) {
+        openPopup(cResult.text, cResult.rect);
+        return;
+      }
 
-      openPopup(text, rect);
+      // B result as fallback when C also failed (at-boundary but best we have)
+      if (bResult) {
+        openPopup(bResult.text, bResult.rect);
+        return;
+      }
+
+      // Last resort: full text of the clicked span
+      const spanText = span.textContent.trim();
+      if (spanText) openPopup(spanText, span.getBoundingClientRect());
     }, 0);
   });
 
