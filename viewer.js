@@ -616,7 +616,11 @@ function scheduleVisibleWordPrefetch(delay = 600) {
   prefetchScheduleTimer = setTimeout(() => {
     prefetchScheduleTimer = null;
     const words = getVisibleWordTexts(1);
-    if (words.length) window.Translator?.queuePrefetchWords?.(words);
+    if (words.length) {
+      document.dispatchEvent(new CustomEvent('pdf-visible-words', {
+        detail: { words },
+      }));
+    }
   }, delay);
 }
 

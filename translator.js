@@ -10,8 +10,8 @@ window.Translator = (() => {
   const KEY_TARGET    = 'tx_target_lang';
   const KEY_SOURCE    = 'tx_source_lang';
   const KEY_MODEL     = 'tx_gemini_model';
-  const KEY_PREFETCH  = 'tx_enable_prefetch';
-  const KEY_STREAMING = 'tx_enable_streaming';
+  const KEY_PREFETCH  = 'tx_prefetch_enabled';
+  const KEY_STREAMING = 'tx_streaming_enabled';
 
   const DEFAULT_MODEL       = 'gemini-2.5-flash-lite';
   const FALLBACK_MODEL      = 'gemini-2.5-flash';
@@ -21,53 +21,6 @@ window.Translator = (() => {
   const PREFETCH_BATCH_MAX  = 40;
   const PREFETCH_INTERVAL   = 2500;
   const PREFETCH_429_PAUSE  = 60_000;
-
-  const LOCAL_EN_VI = Object.freeze({
-    study: 'học tập',
-    education: 'giáo dục',
-    family: 'gia đình',
-    culture: 'văn hóa',
-    school: 'trường học',
-    student: 'học sinh',
-    teacher: 'giáo viên',
-    book: 'sách',
-    history: 'lịch sử',
-    science: 'khoa học',
-    language: 'ngôn ngữ',
-    work: 'công việc',
-    life: 'cuộc sống',
-    world: 'thế giới',
-    people: 'con người',
-    child: 'trẻ em',
-    children: 'trẻ em',
-    country: 'quốc gia',
-    city: 'thành phố',
-    health: 'sức khỏe',
-    food: 'thức ăn',
-    water: 'nước',
-    house: 'nhà',
-    home: 'nhà',
-    love: 'tình yêu',
-    music: 'âm nhạc',
-    art: 'nghệ thuật',
-    business: 'kinh doanh',
-    economy: 'kinh tế',
-    technology: 'công nghệ',
-    computer: 'máy tính',
-    information: 'thông tin',
-    research: 'nghiên cứu',
-    development: 'phát triển',
-    social: 'xã hội',
-    government: 'chính phủ',
-    university: 'đại học',
-    community: 'cộng đồng',
-    environment: 'môi trường',
-    system: 'hệ thống',
-    process: 'quy trình',
-    method: 'phương pháp',
-    problem: 'vấn đề',
-    result: 'kết quả',
-  });
 
   function perf(...args) {
     if (DEBUG_TRANSLATION_PERF) console.debug('[tx-perf]', ...args);
@@ -86,7 +39,7 @@ window.Translator = (() => {
   }
 
   function makeCacheKey(normalizedText, sourceLang, targetLang, model) {
-    return normalizedText.toLowerCase() + '\x00' + sourceLang + '\x00' + targetLang + '\x00' + model;
+    return normalizedText + '\x00' + sourceLang + '\x00' + targetLang + '\x00' + model;
   }
 
   let settingsCache = null;
@@ -155,10 +108,10 @@ window.Translator = (() => {
     return val;
   }
 
-  function l1Set(key, translated) {
+  function l1Set(key, translated, source = 'memory') {
     if (l1.has(key)) l1.delete(key);
     else if (l1.size >= L1_MAX) l1.delete(l1.keys().next().value);
-    l1.set(key, translated);
+    l1.set(key, { translated, source });
   }
 
   const IDB_NAME = 'pdf-tx-cache';
@@ -248,10 +201,7 @@ window.Translator = (() => {
   }
 
   function dictionaryLookup(text, settings) {
-    if (settings.targetLang !== 'vi') return null;
-    if (settings.sourceLang && settings.sourceLang !== 'auto' && settings.sourceLang !== 'en') return null;
-    if (!isSingleWord(text)) return null;
-    return LOCAL_EN_VI[text.toLowerCase()] || null;
+    return window.LocalDictionary?.lookup?.(text, settings.sourceLang, settings.targetLang) || null;
   }
 
   function maxTokensFor(text) {
@@ -289,7 +239,17 @@ window.Translator = (() => {
 
   async function translate(rawText, options = {}) {
     const t0 = performance.now();
-    const settings = await loadSettings();
+    const savedSettings = await loadSettings();
+    const settings = {
+      ...savedSettings,
+      sourceLang: options.sourceLang || savedSettings.sourceLang,
+      targetLang: options.targetLang || savedSettings.targetLang,
+      model: options.model || savedSettings.model,
+      enableStreaming: options.preferStreaming !== undefined
+        ? !!options.preferStreaming
+        : savedSettings.enableStreaming,
+    };
+    const onPartial = options.onPartial || options.onChunk;
     const text = normalize(rawText);
 
     if (!text) {
@@ -304,37 +264,44 @@ window.Translator = (() => {
       };
     }
 
+    const cacheText = isSingleWord(text) ? text.toLowerCase() : text;
     const model = settings.model || DEFAULT_MODEL;
-    const key = makeCacheKey(text, settings.sourceLang, settings.targetLang, model);
+    const key = makeCacheKey(cacheText, settings.sourceLang, settings.targetLang, model);
 
     const l1Hit = l1Get(key);
     if (l1Hit !== null) {
       perf('l1 hit', text, Math.round(performance.now() - t0) + 'ms');
-      return { ok: true, translated: l1Hit, settings, fromCache: 'l1' };
+      return {
+        ok: true,
+        translated: l1Hit.translated,
+        settings,
+        fromCache: l1Hit.source === 'prefetch' ? 'prefetch' : 'memory',
+        source: l1Hit.source,
+      };
     }
 
     const dictHit = dictionaryLookup(text, settings);
     if (dictHit) {
-      l1Set(key, dictHit);
+      l1Set(key, dictHit, 'dictionary');
       idbSet(key, dictHit);
       perf('dictionary hit', text);
-      return { ok: true, translated: dictHit, settings, fromCache: 'dictionary' };
+      return { ok: true, translated: dictHit, settings, fromCache: 'dictionary', source: 'dictionary' };
     }
 
     const l2Hit = await idbGet(key);
     if (l2Hit !== null) {
-      l1Set(key, l2Hit);
+      l1Set(key, l2Hit, 'idb');
       perf('idb hit', text, Math.round(performance.now() - t0) + 'ms');
-      return { ok: true, translated: l2Hit, settings, fromCache: 'l2' };
+      return { ok: true, translated: l2Hit, settings, fromCache: 'idb', source: 'idb' };
     }
 
-    const prefetchPromise = prefetchPromises.get(text.toLowerCase());
+    const prefetchPromise = prefetchPromises.get(cacheText);
     if (prefetchPromise) {
       await prefetchPromise.catch(() => null);
       const warmed = l1Get(key);
       if (warmed !== null) {
         perf('prefetch attach hit', text);
-        return { ok: true, translated: warmed, settings, fromCache: 'prefetch' };
+        return { ok: true, translated: warmed.translated, settings, fromCache: 'prefetch', source: warmed.source };
       }
     }
 
@@ -348,7 +315,7 @@ window.Translator = (() => {
     }
 
     perf('api miss', text);
-    const promise = callInteractive(text, key, settings, model, options)
+    const promise = callInteractive(text, key, settings, model, { ...options, onPartial, cacheText })
       .finally(() => inFlight.delete(key));
     inFlight.set(key, { promise });
     return promise;
@@ -358,7 +325,7 @@ window.Translator = (() => {
     const start = performance.now();
     let result = null;
 
-    if (settings.enableStreaming && options.onChunk) {
+    if (settings.enableStreaming && options.onPartial) {
       result = await callGeminiStream(text, key, settings, model, options);
       if (result?.ok || !result?.retryNormal) {
         if (result?.ok) perf('stream duration', Math.round(performance.now() - start) + 'ms');
@@ -366,12 +333,12 @@ window.Translator = (() => {
       }
     }
 
-    result = await callGeminiOnce(text, key, settings, model);
+    result = await callGeminiOnce(text, key, settings, model, options.signal);
     if (isModelUnavailable(result) && model !== FALLBACK_MODEL) {
-      const fallbackKey = makeCacheKey(text, settings.sourceLang, settings.targetLang, FALLBACK_MODEL);
-      result = await callGeminiOnce(text, fallbackKey, settings, FALLBACK_MODEL);
+      const fallbackKey = makeCacheKey(options.cacheText || text, settings.sourceLang, settings.targetLang, FALLBACK_MODEL);
+      result = await callGeminiOnce(text, fallbackKey, settings, FALLBACK_MODEL, options.signal);
       if (result.ok) {
-        l1Set(key, result.translated);
+        l1Set(key, result.translated, 'memory');
         idbSet(key, result.translated);
       }
     }
@@ -390,9 +357,21 @@ window.Translator = (() => {
     });
   }
 
-  async function callGeminiOnce(text, key, settings, model) {
+  function linkAbortSignal(controller, signal) {
+    if (!signal) return () => {};
+    if (signal.aborted) {
+      controller.abort();
+      return () => {};
+    }
+    const abort = () => controller.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    return () => signal.removeEventListener('abort', abort);
+  }
+
+  async function callGeminiOnce(text, key, settings, model, signal) {
     const endpoint = GEMINI_BASE_URL + encodeURIComponent(model) + ':generateContent';
     const controller = new AbortController();
+    const unlinkAbort = linkAbortSignal(controller, signal);
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     let response;
@@ -408,12 +387,14 @@ window.Translator = (() => {
       });
     } catch (err) {
       clearTimeout(timeoutId);
+      unlinkAbort();
       if (err.name === 'AbortError') {
         return { ok: false, errorType: 'timeout', errorMsg: 'Request timed out. Check your connection.', settings };
       }
       return { ok: false, errorType: 'network', errorMsg: 'Network error. Check your connection.', settings };
     }
     clearTimeout(timeoutId);
+    unlinkAbort();
 
     const data = await parseJsonResponse(response);
     if (!response.ok) return apiError(response.status, data, settings);
@@ -422,7 +403,7 @@ window.Translator = (() => {
     if (!translated) {
       return { ok: false, errorType: 'empty-result', errorMsg: 'Gemini returned an empty result.', settings };
     }
-    l1Set(key, translated);
+    l1Set(key, translated, 'memory');
     idbSet(key, translated);
     return { ok: true, translated, settings, fromCache: false };
   }
@@ -432,6 +413,7 @@ window.Translator = (() => {
     let response;
     const started = performance.now();
     const controller = new AbortController();
+    const unlinkAbort = linkAbortSignal(controller, options.signal);
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
       response = await fetch(endpoint, {
@@ -445,16 +427,19 @@ window.Translator = (() => {
       });
     } catch {
       clearTimeout(timeoutId);
+      unlinkAbort();
       return { ok: false, retryNormal: true, settings };
     }
 
     if (!response.ok) {
       clearTimeout(timeoutId);
+      unlinkAbort();
       const data = await parseJsonResponse(response);
       return apiError(response.status, data, settings);
     }
     if (!response.body?.getReader) {
       clearTimeout(timeoutId);
+      unlinkAbort();
       return { ok: false, retryNormal: true, settings };
     }
 
@@ -485,19 +470,21 @@ window.Translator = (() => {
               firstChunk = true;
               perf('stream first chunk', Math.round(performance.now() - started) + 'ms');
             }
-            options.onChunk?.(translated);
+            options.onPartial?.(translated);
           }
         }
       }
     } catch {
       clearTimeout(timeoutId);
+      unlinkAbort();
       return { ok: false, retryNormal: true, settings };
     }
     clearTimeout(timeoutId);
+    unlinkAbort();
 
     translated = translated.trim();
     if (!translated) return { ok: false, retryNormal: true, settings };
-    l1Set(key, translated);
+    l1Set(key, translated, 'memory');
     idbSet(key, translated);
     return { ok: true, translated, settings, fromCache: false, streamed: true };
   }
@@ -512,6 +499,7 @@ window.Translator = (() => {
     }
     if (status === 429) {
       prefetchPausedUntil = Date.now() + PREFETCH_429_PAUSE;
+      perf('429 pause prefetch', PREFETCH_429_PAUSE + 'ms');
       return { ok: false, status, errorType: 'quota', errorMsg: 'Gemini free-tier rate limit reached. Try again later.', settings };
     }
     return {
@@ -550,7 +538,7 @@ window.Translator = (() => {
     if (dictionaryLookup(text, settings)) return true;
     const hit = await idbGet(key);
     if (hit !== null) {
-      l1Set(key, hit);
+      l1Set(key, hit, 'idb');
       return true;
     }
     return false;
@@ -574,6 +562,7 @@ window.Translator = (() => {
       if (!candidates.length) return;
       prefetchQueue.push(...candidates);
       prefetchQueue = Array.from(new Set(prefetchQueue)).slice(0, 160);
+      perf('prefetch queued word count', candidates.length);
       schedulePrefetch();
     }).catch(() => {});
   }
@@ -590,7 +579,10 @@ window.Translator = (() => {
   async function runPrefetchBatch() {
     const now = Date.now();
     if (!prefetchQueue.length) return;
-    if (now < prefetchPausedUntil || now - lastScrollAt < 450 || now - lastPrefetchAt < PREFETCH_INTERVAL) {
+    if (inFlight.size > 0 ||
+        now < prefetchPausedUntil ||
+        now - lastScrollAt < 450 ||
+        now - lastPrefetchAt < PREFETCH_INTERVAL) {
       setTimeout(schedulePrefetch, 700);
       return;
     }
@@ -621,6 +613,7 @@ window.Translator = (() => {
   }
 
   async function callPrefetchBatch(words, settings) {
+    const started = performance.now();
     const prompt =
       'Translate the following English words into Vietnamese.\n' +
       'Return valid minified JSON only.\n' +
@@ -629,17 +622,14 @@ window.Translator = (() => {
       'Do not add markdown.\n\n' +
       'Words:\n' + JSON.stringify(words);
 
-    const endpoint = GEMINI_BASE_URL + encodeURIComponent(settings.model || DEFAULT_MODEL) + ':generateContent';
+    let model = settings.model || DEFAULT_MODEL;
     let response;
     try {
-      response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': settings.apiKey,
-        },
-        body: requestBody(prompt, 512),
-      });
+      response = await fetchPrefetchModel(model, prompt, settings);
+      if (response.status === 404 && model !== FALLBACK_MODEL) {
+        model = FALLBACK_MODEL;
+        response = await fetchPrefetchModel(model, prompt, settings);
+      }
     } catch {
       return { ok: false };
     }
@@ -647,6 +637,7 @@ window.Translator = (() => {
     const data = await parseJsonResponse(response);
     if (!response.ok) {
       if (response.status === 429) prefetchPausedUntil = Date.now() + PREFETCH_429_PAUSE;
+      if (response.status === 429) perf('429 pause prefetch', PREFETCH_429_PAUSE + 'ms');
       return { ok: false };
     }
 
@@ -663,18 +654,41 @@ window.Translator = (() => {
       const translated = normalize(parsed[word]);
       if (!translated) continue;
       const key = makeCacheKey(word, settings.sourceLang, settings.targetLang, settings.model || DEFAULT_MODEL);
-      l1Set(key, translated);
+      l1Set(key, translated, 'prefetch');
       idbSet(key, translated);
+      if (model !== (settings.model || DEFAULT_MODEL)) {
+        const fallbackKey = makeCacheKey(word, settings.sourceLang, settings.targetLang, model);
+        l1Set(fallbackKey, translated, 'prefetch');
+        idbSet(fallbackKey, translated);
+      }
     }
+    perf('prefetch duration', Math.round(performance.now() - started) + 'ms');
     return { ok: true };
+  }
+
+  function fetchPrefetchModel(model, prompt, settings) {
+    const endpoint = GEMINI_BASE_URL + encodeURIComponent(model) + ':generateContent';
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': settings.apiKey,
+      },
+      body: requestBody(prompt, 512),
+    });
   }
 
   async function clearCache() {
     l1.clear();
     prefetchQueue = [];
     pendingPrefetch.clear();
+    prefetchPromises.clear();
     await idbClear();
   }
+
+  document.addEventListener('pdf-visible-words', (event) => {
+    queuePrefetchWords(event.detail?.words || []);
+  });
 
   return {
     loadSettings,

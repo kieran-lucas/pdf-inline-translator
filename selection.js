@@ -306,7 +306,9 @@
     place(txPopup, rect);
 
     const result = await window.Translator.translate(text, {
-      onChunk: (partial) => {
+      mode: 'interactive',
+      preferStreaming: !/^[\p{L}\p{N}_]+(?:['\u2019\u2018\-\u2010\u2011][\p{L}\p{N}_]+)*$/u.test(normalized),
+      onPartial: (partial) => {
         if (myGen !== popupGeneration) return;
         if (txPopup.classList.contains('tx-hidden')) return;
         setBodyStreaming(partial);
