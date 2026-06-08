@@ -2,7 +2,7 @@
 
 A lightweight local Chrome extension for high-quality PDF reading with instant inline translation on text selection and double-click.
 
-No accounts, no servers, no tracking. Everything runs locally except the optional Google Cloud Translation API call.
+No accounts, no servers, no tracking. Everything runs locally except the Gemini API call you configure with your own key.
 
 ---
 
@@ -10,12 +10,12 @@ No accounts, no servers, no tracking. Everything runs locally except the optiona
 
 - Open local PDF files or load PDFs from a URL
 - Selectable text layer rendered on top of the PDF canvas
-- High-DPI (Retina/HiDPI) rendering — sharp at any zoom
+- High-DPI (Retina/HiDPI) rendering — sharp at any zoom level
 - Lazy page rendering — only visible pages are rendered; large PDFs stay smooth
 - Select any text → click **Translate** → inline popup with translation
 - Double-click any word → popup opens immediately with translation
 - Two-tier translation cache (memory + IndexedDB) — repeated lookups are instant
-- Google Cloud Translation API for real translation (requires your own API key)
+- Gemini API for real translation (requires your own API key from Google AI Studio)
 - "Open in Google Translate" fallback button in every popup
 
 ---
@@ -58,25 +58,27 @@ To reload after code changes: click the reload icon (↺) on the extension card 
 
 ---
 
-## Configuring the Google Cloud Translation API key
+## Setting up the Gemini API key
 
-The extension uses the [Google Cloud Translation API v2](https://cloud.google.com/translate/docs/reference/rest) (the Basic tier has a free quota).
+The extension uses the [Gemini API](https://ai.google.dev/) via Google AI Studio. A free API key is available with a generous daily quota.
 
-### Get an API key
+### Get a Gemini API key
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create or select a project
-3. Enable the **Cloud Translation API**
-4. Go to **APIs & Services → Credentials → Create credentials → API key**
-5. (Optional but recommended) Restrict the key to the Cloud Translation API
+1. Go to [aistudio.google.com](https://aistudio.google.com)
+2. Sign in with your Google account
+3. Click **Get API key** → **Create API key**
+4. Copy the generated key
 
-### Save the key in the extension
+> **Security:** Treat this key like a password. Do not commit it, share it, or paste it into any untrusted tool. If your key is exposed, delete it in AI Studio and create a new one.
+
+### Configure the extension
 
 1. Click the **⚙** button in the top-right of the PDF reader toolbar
-2. Paste your API key into the **Google Cloud API Key** field
-3. Set **Target language** (default: `vi` for Vietnamese — use any [BCP-47 code](https://cloud.google.com/translate/docs/languages))
-4. Optionally set **Source language** (leave blank for auto-detect)
-5. Click **Save**
+2. Paste your Gemini API key into the **Gemini API Key** field
+3. Set **Gemini model** — default is `gemini-2.5-flash` (fast and capable; change only if needed)
+4. Set **Target language** — default is `vi` (Vietnamese); use any [BCP-47 language code](https://cloud.google.com/translate/docs/languages)
+5. Optionally set **Source language** — leave blank for automatic detection
+6. Click **Save**
 
 A green dot appears on the ⚙ button when a key is stored.
 
@@ -86,12 +88,13 @@ To remove the key: open Settings → **Clear Key**.
 
 ## Notes
 
-- **API key is stored locally** — stored only in `chrome.storage.local` on your device. It is never logged, never sent anywhere except the Google Cloud Translation API endpoint (`translation.googleapis.com`).
-- **No unofficial Google Translate endpoint is used** — the extension makes POST requests only to the official `translation.googleapis.com/language/translate/v2` endpoint. The "Open in Google Translate" button opens the official `translate.google.com` website in a new tab.
-- **Scanned/image PDFs** — PDFs that are scanned images rather than text documents will not have a selectable text layer. You need a PDF with embedded text (or one that has been OCR'd) for translation to work.
+- **API key is stored locally** — stored only in `chrome.storage.local` on your device. It is sent only to `generativelanguage.googleapis.com` in the `x-goog-api-key` request header. It is never logged, never stored in the translation cache, never put in a URL query string.
+- **No unofficial Google Translate endpoint** — the extension uses only the official Gemini API (`generativelanguage.googleapis.com`). The "Open in Google Translate" button opens the official `translate.google.com` website in a new tab; it is never called automatically.
+- **Scanned / image PDFs** — PDFs that are scanned images rather than embedded text will not have a selectable text layer. You need a PDF with embedded text (or one that has been OCR'd) for translation to work.
 - **PDFs behind login or paywalls** — URL loading will fail for PDFs that require authentication. Download the file first and open it with **Open File** instead.
-- **Translation cache** — successful translations are cached in memory (up to 200 entries) and in IndexedDB (up to 1 000 entries). Cached results appear instantly on repeat lookups. To clear the cache: open Settings → **Clear Cache**.
+- **Translation cache** — successful translations are cached in memory (up to 200 entries) and in IndexedDB (up to 1 000 entries). Cached results appear instantly on repeat lookups. Cache key includes: normalized text, source language, target language, and Gemini model. To clear: open Settings → **Clear Cache**.
 - **Selection length limit** — inline translation is capped at 2 000 characters. Longer selections show a message and offer the Google Translate fallback instead.
+- **Model names** — if a model becomes unavailable (HTTP 404), try another model name in Settings (e.g. `gemini-1.5-flash`, `gemini-2.0-flash`).
 
 ---
 
@@ -99,14 +102,16 @@ To remove the key: open Settings → **Clear Key**.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| No text layer / can't select text | The PDF contains scanned images only | Use an OCR tool to create a text-layer PDF |
+| No text layer / can't select text | PDF contains scanned images only | Use an OCR tool to add a text layer |
 | "Could not fetch the PDF" on URL load | CORS restriction or login wall | Download the PDF and use Open File |
-| "Invalid or unauthorized API key" | Wrong key or API not enabled | Check the key in Google Cloud Console; ensure Cloud Translation API is enabled |
-| "Rate limit or quota reached" | Free tier exhausted or request burst | Wait and try again; check quota in Google Cloud Console |
-| "Request timed out" | Slow network or API outage | Check your connection and retry |
-| Translation popup doesn't appear on selection | Text layer missing or PDF is image-only | See scanned PDF note above |
-| Extension stops working after Chrome update | Extension needs reload | Go to chrome://extensions and click the reload icon for this extension |
-| Popup shows stale translation after changing language | Old cache entries use old language key | Click Clear Cache in Settings, then translate again |
+| "No Gemini API key configured" | Key not saved yet | Open ⚙ Settings, paste key, click Save |
+| "Invalid Gemini API key or unauthorized project" | Wrong key or billing issue | Verify the key at aistudio.google.com; check API is enabled |
+| "Gemini model unavailable" | Model name is wrong or deprecated | Open Settings, correct the model name (e.g. `gemini-2.5-flash`) |
+| "Gemini free-tier rate limit reached" | Too many requests in a short period | Wait a moment and try again |
+| "Request timed out" | Slow network or Gemini outage | Check your connection and retry |
+| Translation popup doesn't appear | Text layer missing or PDF is image-only | See scanned PDF note above |
+| Extension stops working after Chrome update | Extension needs reload | Go to chrome://extensions and click ↺ |
+| Popup shows stale translation after changing language or model | Old cache entries use old key | Click Clear Cache in Settings, then translate again |
 
 ---
 
@@ -116,46 +121,52 @@ Run through this after any code change or extension reload.
 
 ### PDF loading
 
-- [ ] **Load local PDF** — click Open File, select a multi-page PDF, all pages appear as grey placeholders, visible pages render progressively
-- [ ] **Load URL PDF** — paste a public PDF URL, click Load URL, PDF loads correctly
-- [ ] **Invalid URL** — enter `not-a-url`, expect a clear error message
-- [ ] **Non-PDF file** — select a `.jpg` via Open File, expect "not a valid PDF" error
+- [ ] Load a local multi-page PDF — pages appear as grey placeholders, visible pages render progressively
+- [ ] Load a PDF from a public URL — PDF loads and renders correctly
+- [ ] Enter an invalid URL — clear error message appears
+- [ ] Open a non-PDF file — "not a valid PDF" error appears
 
 ### Rendering quality
 
-- [ ] **Zoom levels** — change zoom to 50%, 150%, 300%; text and images should remain sharp at each level (no blurry upscaling)
-- [ ] **Scroll a multi-page PDF** — scroll through a 10+ page document; pages outside the viewport are placeholders, pages entering the viewport render smoothly without jank
+- [ ] Change zoom to 50%, 150%, 300% — text and images are sharp at each level
+- [ ] Scroll through a 10+ page PDF — off-screen pages stay as placeholders; pages entering the viewport render smoothly
 
-### Text selection and translation
+### Translation
 
-- [ ] **Select text and Translate** — drag-select a sentence; Translate button appears; click it; popup shows spinner then translation
-- [ ] **Double-click a word** — popup opens immediately, no Translate button step
-- [ ] **Close with Escape** — press Escape while popup is open; popup closes
-- [ ] **Close with ×** — click the × button; popup closes
-- [ ] **Click outside popup** — click anywhere outside the popup; popup closes
+- [ ] Drag-select text → click Translate → spinner → translation appears in popup
+- [ ] Double-click a word → popup opens directly → translation appears
+- [ ] Press Escape — popup closes
+- [ ] Click × — popup closes
+- [ ] Click outside popup — popup closes
 
-### Translation correctness
+### API key scenarios
 
-- [ ] **Without API key** — clear key in Settings; translate any word; popup shows "No API key" message with ⚙ Open Settings button and Google Translate fallback
-- [ ] **Invalid API key** — save a fake key; translate; popup shows auth error with fallback button
-- [ ] **Valid API key** — save a real key; translate; popup shows translation in the target language
-- [ ] **Copy button** — after a successful translation, click Copy; paste somewhere to verify the text
-- [ ] **Google Translate fallback** — click "Open in Google Translate ↗"; new tab opens with the text pre-filled at translate.google.com
+- [ ] No key saved → popup shows "No Gemini API key configured" with ⚙ Open Settings + Google Translate fallback
+- [ ] Invalid key saved → popup shows "Invalid Gemini API key or unauthorized project" with fallback
+- [ ] Valid key saved → popup shows correct translation in the target language
+- [ ] Copy button → paste elsewhere to verify the translated text
+- [ ] "Open in Google Translate ↗" → new tab opens at translate.google.com with text pre-filled
 
 ### Cache behaviour
 
-- [ ] **Cache hit (memory)** — translate a word, close popup, double-click same word immediately; result appears with no network request (check DevTools → Network)
-- [ ] **Cache hit (persistent)** — translate a word, reload the extension viewer tab (Ctrl+R), double-click same word; result appears from IndexedDB, no API call
-- [ ] **Clear cache** — open Settings → Clear Cache; translate same word again; network request fires
+- [ ] Translate a word; immediately double-click same word → no network request (DevTools → Network)
+- [ ] Translate a word; reload the viewer tab (Ctrl+R); double-click same word → result from IndexedDB, no API call
+- [ ] Open Settings → Clear Cache; translate same word → network request fires
 
 ### Edge cases
 
-- [ ] **Long selection limit** — select more than 2 000 characters; popup shows length warning and fallback button, no API call
-- [ ] **Rapid double-click same word** — double-click 3–4 times quickly; only one API call should appear in DevTools → Network
-- [ ] **Select new text before old request returns** — select one word, immediately select a different word and click Translate; only the second translation appears in the popup
+- [ ] Select more than 2 000 characters → length warning shown, no API call made
+- [ ] Rapid double-click same word 4–5 times → only one POST in DevTools → Network
+- [ ] Select word A, quickly select word B and click Translate → only word B's translation appears
+
+### Settings
+
+- [ ] Open Settings — label reads "Gemini API Key" (not "Google Cloud API Key")
+- [ ] Model field shows and persists correct value after Save + reopen
+- [ ] Change model to an invalid name → translate → "Gemini model unavailable" message appears
 
 ### Extension lifecycle
 
-- [ ] **Reload extension** — go to chrome://extensions, reload the extension, open viewer again; everything works
-- [ ] **Settings persist** — save API key, reload extension, open Settings; key is still saved (shown as masked dots in the field, green dot on ⚙ button)
-- [ ] **No console errors** — open DevTools Console; normal use should produce no errors or warnings
+- [ ] Reload extension at chrome://extensions, reopen viewer — all features work
+- [ ] Save API key, reload extension, open Settings — key persists (green dot on ⚙)
+- [ ] Normal use with DevTools Console open — no errors or warnings

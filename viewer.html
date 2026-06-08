@@ -56,14 +56,25 @@
 
       <div class="settings-row">
         <label for="settings-api-key" class="settings-label">
-          Google Cloud API Key
+          Gemini API Key
         </label>
         <input
           type="password"
           id="settings-api-key"
           class="settings-input"
-          placeholder="Paste your key here"
+          placeholder="Paste your Gemini API key here"
           autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+
+      <div class="settings-row">
+        <label for="settings-model" class="settings-label">Gemini model</label>
+        <input
+          type="text"
+          id="settings-model"
+          class="settings-input settings-model-input"
+          placeholder="gemini-2.5-flash"
           spellcheck="false"
         >
       </div>

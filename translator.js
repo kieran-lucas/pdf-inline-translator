@@ -2,27 +2,19 @@
 
 // ── Translator ─────────────────────────────────────────────────────────────
 // Manages settings storage, two-tier translation cache, in-flight request
-// deduplication, and Google Cloud Translation API v2 calls.
+// deduplication, and Gemini API (generativelanguage.googleapis.com) calls.
 // Exposed as window.Translator for settings.js and selection.js.
 
 window.Translator = (() => {
 
-  const KEY_APIKEY = 'tx_api_key';
-  const KEY_TARGET = 'tx_target_lang';
-  const KEY_SOURCE = 'tx_source_lang';
-  const ENDPOINT   = 'https://translation.googleapis.com/language/translate/v2';
-  const MAX_CHARS  = 2000;
-  const TIMEOUT_MS = 10_000;
-
-  // ── HTML entity decoder ────────────────────────────────────────────────────
-  // Google Cloud Translation API v2 returns HTML-encoded text (e.g. &amp;).
-  // Decode via a throwaway textarea — never set innerHTML with user content.
-
-  function decodeEntities(str) {
-    const tmp = document.createElement('textarea');
-    tmp.innerHTML = str;
-    return tmp.value;
-  }
+  const KEY_APIKEY      = 'tx_api_key';
+  const KEY_TARGET      = 'tx_target_lang';
+  const KEY_SOURCE      = 'tx_source_lang';
+  const KEY_MODEL       = 'tx_gemini_model';
+  const DEFAULT_MODEL   = 'gemini-2.5-flash';
+  const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  const MAX_CHARS       = 2000;
+  const TIMEOUT_MS      = 15_000;
 
   // ── Text normalisation ─────────────────────────────────────────────────────
 
@@ -30,41 +22,44 @@ window.Translator = (() => {
     return text.replace(/\s+/g, ' ').trim();
   }
 
-  // Cache key includes all three dimensions that make a translation unique.
-  function makeCacheKey(normalizedText, sourceLang, targetLang) {
-    return normalizedText + '\x00' + sourceLang + '\x00' + targetLang;
+  // Cache key includes model so a model change correctly invalidates old entries.
+  function makeCacheKey(normalizedText, sourceLang, targetLang, model) {
+    return normalizedText + '\x00' + sourceLang + '\x00' + targetLang + '\x00' + model;
   }
 
-  // ── Settings — with in-memory cache so L1 lookups are truly synchronous ───
+  // ── Settings — with in-memory cache so L1 lookups cost no storage round-trip
 
-  let settingsCache = null; // { apiKey, targetLang, sourceLang } | null
+  let settingsCache = null; // { apiKey, targetLang, sourceLang, model } | null
 
   function loadSettings() {
     if (settingsCache) return Promise.resolve(settingsCache);
     return new Promise(resolve => {
-      chrome.storage.local.get([KEY_APIKEY, KEY_TARGET, KEY_SOURCE], result => {
+      chrome.storage.local.get([KEY_APIKEY, KEY_TARGET, KEY_SOURCE, KEY_MODEL], result => {
         settingsCache = {
           apiKey:     result[KEY_APIKEY] || '',
           targetLang: result[KEY_TARGET] || 'vi',
           sourceLang: result[KEY_SOURCE] || 'auto',
+          model:      result[KEY_MODEL]  || DEFAULT_MODEL,
         };
         resolve(settingsCache);
       });
     });
   }
 
-  function saveSettings({ apiKey, targetLang, sourceLang }) {
+  function saveSettings({ apiKey, targetLang, sourceLang, model }) {
     return new Promise(resolve => {
       const data = {
         [KEY_APIKEY]: apiKey     !== undefined ? apiKey     : '',
         [KEY_TARGET]: targetLang !== undefined ? targetLang : 'vi',
         [KEY_SOURCE]: sourceLang !== undefined ? sourceLang : 'auto',
+        [KEY_MODEL]:  model      !== undefined ? model      : DEFAULT_MODEL,
       };
       chrome.storage.local.set(data, () => {
         settingsCache = {
           apiKey:     data[KEY_APIKEY],
           targetLang: data[KEY_TARGET],
           sourceLang: data[KEY_SOURCE],
+          model:      data[KEY_MODEL],
         };
         resolve();
       });
@@ -84,18 +79,18 @@ window.Translator = (() => {
   // Map preserves insertion order; delete-on-read + re-insert gives true LRU.
 
   const L1_MAX = 200;
-  const l1     = new Map(); // key → translated string
+  const l1     = new Map();
 
   function l1Get(key) {
     if (!l1.has(key)) return null;
     const val = l1.get(key);
-    l1.delete(key);   // remove from position
-    l1.set(key, val); // re-insert at end (most-recently-used)
+    l1.delete(key);
+    l1.set(key, val); // re-insert at end = most-recently-used
     return val;
   }
 
   function l1Set(key, translated) {
-    if (l1.has(key)) l1.delete(key); // refresh position
+    if (l1.has(key)) l1.delete(key);
     else if (l1.size >= L1_MAX) l1.delete(l1.keys().next().value); // evict LRU
     l1.set(key, translated);
   }
@@ -119,7 +114,7 @@ window.Translator = (() => {
         const db = e.target.result;
         if (!db.objectStoreNames.contains(IDB_STORE)) {
           const store = db.createObjectStore(IDB_STORE, { keyPath: 'key' });
-          store.createIndex('ts', 'ts', { unique: false }); // for oldest-first trim
+          store.createIndex('ts', 'ts', { unique: false });
         }
       };
       req.onsuccess = (e) => resolve(e.target.result);
@@ -189,9 +184,27 @@ window.Translator = (() => {
   }
 
   // ── In-flight deduplication ────────────────────────────────────────────────
-  // Concurrent requests for the same key share one promise — one API call.
+  // Concurrent requests for the same cache key share one promise — one API call.
 
-  const inFlight = new Map(); // cacheKey → Promise<result>
+  const inFlight = new Map();
+
+  // ── Prompt builder ─────────────────────────────────────────────────────────
+
+  function buildPrompt(text, sourceLang, targetLang) {
+    const fromClause = (sourceLang && sourceLang !== 'auto')
+      ? `from ${sourceLang} `
+      : '';
+    return (
+      `Translate the following text ${fromClause}into ${targetLang}.\n` +
+      `Return only the translated text.\n` +
+      `Do not explain.\n` +
+      `Do not add quotation marks.\n` +
+      `Do not add markdown.\n` +
+      `Preserve the meaning, tone, punctuation, and line breaks.\n` +
+      `If the input is already in ${targetLang}, return it unchanged.\n` +
+      `\nText: ${text}`
+    );
+  }
 
   // ── Core translate() ───────────────────────────────────────────────────────
   // Returns:
@@ -202,7 +215,7 @@ window.Translator = (() => {
     const settings = await loadSettings(); // fast: memory-cached after first call
 
     if (!settings.apiKey) {
-      return { ok: false, errorType: 'no-key', errorMsg: 'No API key configured.', settings };
+      return { ok: false, errorType: 'no-key', errorMsg: 'No Gemini API key configured.', settings };
     }
 
     const text = normalize(rawText);
@@ -220,9 +233,10 @@ window.Translator = (() => {
       };
     }
 
-    const key = makeCacheKey(text, settings.sourceLang, settings.targetLang);
+    const model = settings.model || DEFAULT_MODEL;
+    const key   = makeCacheKey(text, settings.sourceLang, settings.targetLang, model);
 
-    // ── L1 hit (synchronous after the settings await) ──────────────────────
+    // ── L1 hit ─────────────────────────────────────────────────────────────
     const l1Hit = l1Get(key);
     if (l1Hit !== null) {
       return { ok: true, translated: l1Hit, settings, fromCache: 'l1' };
@@ -231,45 +245,50 @@ window.Translator = (() => {
     // ── L2 hit (IndexedDB, ~5–20 ms) ──────────────────────────────────────
     const l2Hit = await idbGet(key);
     if (l2Hit !== null) {
-      l1Set(key, l2Hit); // promote to L1 for subsequent requests
+      l1Set(key, l2Hit);
       return { ok: true, translated: l2Hit, settings, fromCache: 'l2' };
     }
 
     // ── In-flight dedup ────────────────────────────────────────────────────
     if (inFlight.has(key)) {
-      return inFlight.get(key); // reuse the pending promise — no second API call
+      return inFlight.get(key); // reuse pending promise — no second API call
     }
 
-    const promise = callApi(text, key, settings);
+    const promise = callGemini(text, key, settings, model);
     inFlight.set(key, promise);
     promise.finally(() => inFlight.delete(key));
     return promise;
   }
 
-  // ── callApi ────────────────────────────────────────────────────────────────
-  // Fires the Google Cloud Translation API request and writes to both caches
-  // on success. API key is never logged.
+  // ── callGemini ─────────────────────────────────────────────────────────────
+  // Fires the Gemini generateContent request.
+  // API key is sent in the x-goog-api-key header and is never logged.
 
-  async function callApi(text, key, settings) {
-    const body = { q: text, target: settings.targetLang };
-    if (settings.sourceLang && settings.sourceLang !== 'auto') {
-      body.source = settings.sourceLang;
-    }
+  async function callGemini(text, key, settings, model) {
+    const endpoint = GEMINI_BASE_URL + encodeURIComponent(model) + ':generateContent';
+    const prompt   = buildPrompt(text, settings.sourceLang, settings.targetLang);
 
     const controller = new AbortController();
     const timeoutId  = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     let response;
     try {
-      response = await fetch(
-        ENDPOINT + '?key=' + encodeURIComponent(settings.apiKey),
-        {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify(body),
-          signal:  controller.signal,
-        }
-      );
+      response = await fetch(endpoint, {
+        method:  'POST',
+        headers: {
+          'Content-Type':   'application/json',
+          'x-goog-api-key': settings.apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature:     0,
+            topP:            1,
+            maxOutputTokens: 2048,
+          },
+        }),
+        signal: controller.signal,
+      });
     } catch (err) {
       clearTimeout(timeoutId);
       if (err.name === 'AbortError') {
@@ -294,11 +313,15 @@ window.Translator = (() => {
     if (!response.ok) {
       const status = response.status;
       const apiMsg = data?.error?.message || '';
+
       if (status === 401 || status === 403) {
-        return { ok: false, errorType: 'auth', errorMsg: 'Invalid or unauthorized API key. Check Settings.', settings };
+        return { ok: false, errorType: 'auth', errorMsg: 'Invalid Gemini API key or unauthorized project.', settings };
+      }
+      if (status === 404) {
+        return { ok: false, errorType: 'model', errorMsg: 'Gemini model unavailable. Check model name in Settings.', settings };
       }
       if (status === 429) {
-        return { ok: false, errorType: 'quota', errorMsg: 'Rate limit or quota reached. Try again later.', settings };
+        return { ok: false, errorType: 'quota', errorMsg: 'Gemini free-tier rate limit reached. Try again later.', settings };
       }
       return {
         ok: false,
@@ -308,14 +331,18 @@ window.Translator = (() => {
       };
     }
 
-    const raw = data?.data?.translations?.[0]?.translatedText;
-    if (!raw) {
-      return { ok: false, errorType: 'empty-result', errorMsg: 'API returned an empty result.', settings };
+    // Robust extraction: join all parts, trim
+    const parts = data?.candidates?.[0]?.content?.parts;
+    if (!parts || parts.length === 0) {
+      return { ok: false, errorType: 'empty-result', errorMsg: 'Gemini returned an empty result.', settings };
     }
 
-    const translated = decodeEntities(raw);
+    const translated = parts.map(p => p.text || '').join('').trim();
+    if (!translated) {
+      return { ok: false, errorType: 'empty-result', errorMsg: 'Gemini returned an empty result.', settings };
+    }
 
-    // Write to both caches. idbSet is non-blocking (fire-and-forget).
+    // Write to both caches on success (idbSet is non-blocking)
     l1Set(key, translated);
     idbSet(key, translated);
 
@@ -338,6 +365,7 @@ window.Translator = (() => {
     translate,
     clearCache,
     MAX_CHARS,
+    DEFAULT_MODEL,
   };
 
 })();

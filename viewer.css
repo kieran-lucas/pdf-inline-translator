@@ -494,6 +494,10 @@ body {
   width: 80px;
 }
 
+.settings-model-input {
+  max-width: 260px;
+}
+
 .settings-actions {
   display: flex;
   gap: 8px;

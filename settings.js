@@ -11,6 +11,7 @@
   const apiKeyInput = document.getElementById('settings-api-key');
   const targetInput = document.getElementById('settings-target-lang');
   const sourceInput = document.getElementById('settings-source-lang');
+  const modelInput  = document.getElementById('settings-model');
   const saveBtn       = document.getElementById('settings-save');
   const clearBtn      = document.getElementById('settings-clear');
   const clearCacheBtn = document.getElementById('settings-clear-cache');
@@ -39,10 +40,10 @@
 
   async function populateForm() {
     const s = await window.Translator.loadSettings();
-    // Show masked key placeholder rather than the real key for visual confirmation.
-    apiKeyInput.value = s.apiKey ? s.apiKey : '';
+    apiKeyInput.value = s.apiKey || '';
     targetInput.value = s.targetLang;
     sourceInput.value = s.sourceLang === 'auto' ? '' : s.sourceLang;
+    modelInput.value  = s.model || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash';
     setKeyIndicator(!!s.apiKey);
   }
 
@@ -60,7 +61,8 @@
     const apiKey     = apiKeyInput.value.trim();
     const targetLang = targetInput.value.trim() || 'vi';
     const sourceLang = sourceInput.value.trim() || 'auto';
-    await window.Translator.saveSettings({ apiKey, targetLang, sourceLang });
+    const model      = modelInput.value.trim()  || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash';
+    await window.Translator.saveSettings({ apiKey, targetLang, sourceLang, model });
     setKeyIndicator(!!apiKey);
     showStatus('Settings saved.', false);
   });

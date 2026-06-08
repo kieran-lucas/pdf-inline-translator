@@ -165,7 +165,7 @@
     if (errorType === 'no-key') {
       const msg = document.createElement('p');
       msg.className   = 'tx-error-text';
-      msg.textContent = 'No API key configured. Add your Google Cloud API key in Settings.';
+      msg.textContent = 'No Gemini API key configured. Add your Gemini API key in Settings.';
       txBody.appendChild(msg);
 
       const openSettingsBtn = document.createElement('button');
