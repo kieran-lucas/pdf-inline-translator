@@ -1,5 +1,8 @@
 sources/
 tmp/
+sources.json
+node_modules/
+*.log
 *.dump
 *.raw
 *.bz2

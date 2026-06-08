@@ -1,4 +1,5 @@
 en-vi-full.generated.jsonl
+en-vi-core.generated.json
 *.dump
 *.raw
 *.bz2
