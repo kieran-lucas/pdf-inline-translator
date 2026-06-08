@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "PDF Inline Translator",
+  "version": "0.1.0",
+  "description": "Read and translate PDFs inline inside the browser.",
+
+  "permissions": ["tabs"],
+  "host_permissions": ["<all_urls>"],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_title": "Open PDF Reader",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/pdf.worker.min.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

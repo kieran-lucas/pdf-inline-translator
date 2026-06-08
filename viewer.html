@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Reader</title>
+  <link rel="icon" href="icons/icon48.png" type="image/png">
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+
+  <div id="toolbar">
+    <span id="toolbar-title">PDF Reader</span>
+
+    <div id="toolbar-controls">
+      <label for="file-input" class="btn" title="Open a local PDF file">Open File</label>
+      <input type="file" id="file-input" accept=".pdf,application/pdf">
+
+      <div id="url-group">
+        <input
+          type="text"
+          id="url-input"
+          placeholder="https://example.com/file.pdf"
+          spellcheck="false"
+          autocomplete="off"
+        >
+        <button id="url-load" class="btn">Load URL</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="error-bar" class="hidden" role="alert" aria-live="assertive"></div>
+  <div id="loading-bar" class="hidden" aria-live="polite">Loading PDF…</div>
+
+  <div id="pdf-container"></div>
+
+  <script src="lib/pdf.min.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>

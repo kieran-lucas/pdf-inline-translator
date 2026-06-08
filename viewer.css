@@ -1,0 +1,186 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #525659;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  color: #eee;
+  min-height: 100vh;
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────────────── */
+
+#toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: #1f1f1f;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+#toolbar-title {
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  color: #fff;
+}
+
+#toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* hide the native file input visually; the <label> acts as the button */
+#file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#url-group {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+#url-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2b2b2b;
+  color: #eee;
+  font-size: 13px;
+  outline: none;
+}
+
+#url-input:focus {
+  border-color: #3b82f6;
+}
+
+#url-input::placeholder {
+  color: #666;
+}
+
+.btn {
+  display: inline-block;
+  padding: 5px 14px;
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  white-space: nowrap;
+  line-height: 1.5;
+  text-align: center;
+  user-select: none;
+}
+
+.btn:hover {
+  background: #2563eb;
+}
+
+.btn:active {
+  background: #1d4ed8;
+}
+
+/* ── Status bars ──────────────────────────────────────────────────────────── */
+
+#error-bar {
+  background: #b91c1c;
+  color: #fff;
+  padding: 10px 16px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+#error-bar.hidden,
+#loading-bar.hidden {
+  display: none;
+}
+
+#loading-bar {
+  background: #1e3a5f;
+  color: #93c5fd;
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+/* ── PDF pages container ──────────────────────────────────────────────────── */
+
+#pdf-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px;
+  gap: 20px;
+}
+
+/* ── Individual page ──────────────────────────────────────────────────────── */
+
+.pdf-page {
+  position: relative;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  /* width & height are set inline by viewer.js */
+  line-height: 0; /* collapse gap under canvas */
+}
+
+.pdf-page canvas {
+  display: block;
+}
+
+/* ── Text layer (transparent, selectable) ─────────────────────────────────── */
+
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  /* pointer-events: auto so text is selectable */
+}
+
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.textLayer ::selection {
+  background: rgba(37, 99, 235, 0.28);
+  color: transparent;
+}
+
+/* ── Per-page render error ────────────────────────────────────────────────── */
+
+.page-error {
+  width: 600px;
+  max-width: 100%;
+  padding: 12px 16px;
+  background: #3b1f1f;
+  color: #fca5a5;
+  border-left: 3px solid #b91c1c;
+  border-radius: 4px;
+  font-size: 13px;
+}
