@@ -7,8 +7,6 @@
 (function initSelectionLayer() {
 
   // ── Create UI elements ─────────────────────────────────────────────────────
-  // Both elements live on <body> so they are never affected by pdfContainer
-  // clearing (zoom changes, new file loads).
 
   const txBtn = document.createElement('button');
   txBtn.id        = 'tx-btn';
@@ -26,7 +24,7 @@
   txPopup.innerHTML =
     '<div class="tx-head">' +
       '<span class="tx-source-text"></span>' +
-      '<button class="tx-close-btn" aria-label="Close">×</button>' +
+      '<button class="tx-close-btn" aria-label="Close">&#x2715;</button>' +
     '</div>' +
     '<div class="tx-body"></div>';
   document.body.appendChild(txPopup);
@@ -37,35 +35,27 @@
 
   // ── State ──────────────────────────────────────────────────────────────────
 
-  // Captured at mouseup time so the translate button click can use it even if
-  // the browser clears the selection when focus moves to the button.
-  let pending = null; // { text: string, rect: DOMRect } | null
-
-  // Rect stored when a popup opens; used for re-placement after content loads.
-  let openRect = null;
-
-  // Incremented each time openPopup is called. Each call captures myGen and
-  // checks it after every await — if it no longer matches, the popup has been
-  // superseded by a newer selection and the stale result is silently discarded.
+  let pending        = null; // { text, rect } | null
+  let openRect       = null;
   let popupGeneration = 0;
 
   // ── Visibility helpers ─────────────────────────────────────────────────────
 
-  function hideTxBtn() { txBtn.classList.add('tx-hidden');   }
+  function hideTxBtn() { txBtn.classList.add('tx-hidden'); }
   function hidePopup() { txPopup.classList.add('tx-hidden'); }
 
   function hideAll() {
     hideTxBtn();
     hidePopup();
     window.PdfViewerState?.clearCustomSelection?.();
-    pending = null;
+    pending  = null;
     openRect = null;
   }
 
   // ── Placement ──────────────────────────────────────────────────────────────
 
-  const GAP  = 8;   // px between the reference rect and the placed element
-  const EDGE = 10;  // minimum px gap from any viewport edge
+  const GAP  = 10;
+  const EDGE = 10;
 
   function computePos(w, h, refRect) {
     const vw = window.innerWidth;
@@ -85,7 +75,6 @@
     return { top: Math.round(top), left: Math.round(left) };
   }
 
-  // Off-screen measurement + single-repaint placement (initial show).
   function place(el, refRect) {
     el.style.top  = '-9999px';
     el.style.left = '-9999px';
@@ -95,7 +84,6 @@
     el.style.left = left + 'px';
   }
 
-  // Re-position an already-visible element without the off-screen flash.
   function rePlace(el, refRect) {
     const { top, left } = computePos(el.offsetWidth, el.offsetHeight, refRect);
     el.style.top  = top  + 'px';
@@ -116,53 +104,206 @@
     return (entry?.pronunciations || []).find(p => p?.ipa || p?.audio) || null;
   }
 
-  function appendTextList(parent, label, values) {
-    const clean = (values || []).filter(Boolean);
-    if (!clean.length) return;
-    const p = document.createElement('p');
-    p.className = 'tx-lex-row';
-    p.textContent = `${label}: ${clean.join(', ')}`;
-    parent.appendChild(p);
+  function sourceBadgeLabel(source) {
+    if (!source) return null;
+    if (source === 'core' || source === 'core-map')  return 'core';
+    if (source === 'full' || source === 'idb-full')  return 'full dict';
+    if (source === 'gemini')                          return 'Gemini';
+    if (source === 'idb')                             return 'cached';
+    if (source === 'memory')                          return null;
+    return source;
   }
 
+  // Build the expandable senses section (hidden by default).
   function makeLexicalExpanded(entry) {
     const wrap = document.createElement('div');
-    wrap.className = 'tx-lex-expanded tx-hidden';
+    wrap.className = 'tx-expanded tx-hidden';
 
     for (const sense of entry?.senses || []) {
       const block = document.createElement('div');
-      block.className = 'tx-lex-sense';
+      block.className = 'tx-sense';
 
       const heading = document.createElement('div');
-      heading.className = 'tx-lex-sense-heading';
-      heading.textContent = [
-        sense.pos,
-        ...(sense.viMeanings || []).slice(0, 3),
-      ].filter(Boolean).join(' · ');
+      heading.className = 'tx-sense-heading';
+      const parts = [sense.pos, ...(sense.viMeanings || []).slice(0, 3)].filter(Boolean);
+      heading.textContent = parts.join(' · ');
       block.appendChild(heading);
 
       if (sense.enDefinition) {
         const def = document.createElement('p');
-        def.className = 'tx-lex-definition';
+        def.className   = 'tx-sense-def';
         def.textContent = sense.enDefinition;
         block.appendChild(def);
       }
 
-      for (const ex of (sense.examples || []).slice(0, 2)) {
+      for (const ex of (sense.examples || []).slice(0, 1)) {
         const p = document.createElement('p');
-        p.className = 'tx-lex-example';
-        p.textContent = ex.vi ? `${ex.en} / ${ex.vi}` : ex.en;
+        p.className   = 'tx-sense-example';
+        p.textContent = ex.vi ? `“${ex.en}” → ${ex.vi}` : `“${ex.en}”`;
         block.appendChild(p);
       }
 
-      appendTextList(block, 'Synonyms', sense.synonyms);
-      appendTextList(block, 'Antonyms', sense.antonyms);
-      appendTextList(block, 'Collocations', sense.collocations);
-      wrap.appendChild(block);
+      const lists = [
+        ['Synonyms', sense.synonyms],
+        ['Antonyms', sense.antonyms],
+        ['Collocations', sense.collocations],
+      ];
+      for (const [label, values] of lists) {
+        const clean = (values || []).filter(Boolean);
+        if (!clean.length) continue;
+        const p = document.createElement('p');
+        p.className   = 'tx-sense-row';
+        p.textContent = `${label}: ${clean.join(', ')}`;
+        block.appendChild(p);
+      }
+
+      if (block.childElementCount > 0) wrap.appendChild(block);
     }
 
     return wrap;
   }
+
+  // ── Action builder ─────────────────────────────────────────────────────────
+
+  function appendActions(container, translated, sourceText, result, wordForSave, expanded) {
+    const actions = document.createElement('div');
+    actions.className = 'tx-actions';
+
+    // Copy translation
+    const copyBtn = document.createElement('button');
+    copyBtn.className   = 'tx-action-btn tx-copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.title = 'Copy translation';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(translated).then(() => {
+        copyBtn.textContent = 'Copied!';
+        copyBtn.classList.add('tx-copy-btn--done');
+        setTimeout(() => {
+          if (copyBtn.isConnected) {
+            copyBtn.textContent = 'Copy';
+            copyBtn.classList.remove('tx-copy-btn--done');
+          }
+        }, 1500);
+      }).catch(() => {});
+    });
+    actions.appendChild(copyBtn);
+
+    // Copy source
+    const copySourceBtn = document.createElement('button');
+    copySourceBtn.className   = 'tx-action-btn tx-copy-source-btn';
+    copySourceBtn.textContent = 'Copy source';
+    copySourceBtn.title = 'Copy original text';
+    copySourceBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(sourceText).then(() => {
+        copySourceBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          if (copySourceBtn.isConnected) copySourceBtn.textContent = 'Copy source';
+        }, 1500);
+      }).catch(() => {});
+    });
+    actions.appendChild(copySourceBtn);
+
+    // Speak (Web Speech API)
+    if ('speechSynthesis' in window) {
+      const speakBtn = document.createElement('button');
+      speakBtn.className   = 'tx-action-btn tx-speak-btn';
+      speakBtn.textContent = '🔊 Speak';
+      speakBtn.title = 'Pronounce in English';
+      speakBtn.addEventListener('click', () => {
+        window.speechSynthesis.cancel();
+        const utt = new SpeechSynthesisUtterance(sourceText);
+        utt.lang = 'en-US';
+        utt.rate = 0.85;
+        window.speechSynthesis.speak(utt);
+      });
+      actions.appendChild(speakBtn);
+    }
+
+    // Save word
+    const saveBtn = document.createElement('button');
+    saveBtn.className   = 'tx-action-btn tx-save-btn';
+    saveBtn.textContent = '☆ Save';
+    saveBtn.title = 'Save to word list';
+    const SAVED_KEY = 'saved_words';
+
+    function refreshSaveState() {
+      chrome.storage.local.get(SAVED_KEY, (data) => {
+        const words = data[SAVED_KEY] || [];
+        const saved = words.some(w => w.word === wordForSave);
+        saveBtn.textContent = saved ? '★ Saved' : '☆ Save';
+        saveBtn.classList.toggle('tx-save-btn--saved', saved);
+      });
+    }
+    refreshSaveState();
+
+    saveBtn.addEventListener('click', () => {
+      chrome.storage.local.get(SAVED_KEY, (data) => {
+        const words = data[SAVED_KEY] || [];
+        const idx   = words.findIndex(w => w.word === wordForSave);
+        if (idx >= 0) {
+          words.splice(idx, 1);
+        } else {
+          words.push({
+            word:        wordForSave,
+            translation: translated,
+            source:      result.source || 'unknown',
+            savedAt:     Date.now(),
+          });
+        }
+        chrome.storage.local.set({ [SAVED_KEY]: words }, refreshSaveState);
+      });
+    });
+    actions.appendChild(saveBtn);
+
+    // More / Less (only when expanded section has content)
+    if (expanded && expanded.childElementCount) {
+      const moreBtn = document.createElement('button');
+      moreBtn.className   = 'tx-action-btn tx-more-btn';
+      moreBtn.textContent = 'More ▸';
+      moreBtn.addEventListener('click', () => {
+        const hidden = expanded.classList.toggle('tx-hidden');
+        moreBtn.textContent = hidden ? 'More ▸' : 'Less ▾';
+        if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
+      });
+      actions.appendChild(moreBtn);
+    }
+
+    // Ask Gemini — shown when result came from offline dictionary
+    const isDictSource = result.fromCache === 'dictionary' ||
+      (result.source && result.source !== 'gemini' && result.source !== 'idb' && result.source !== 'memory');
+    if (isDictSource) {
+      const geminiBtn = document.createElement('button');
+      geminiBtn.className   = 'tx-action-btn tx-retry-btn';
+      geminiBtn.textContent = 'Ask Gemini';
+      geminiBtn.title = 'Get AI translation from Gemini';
+      geminiBtn.addEventListener('click', () => {
+        if (!openRect) return;
+        geminiBtn.disabled = true;
+        openPopup(sourceText, openRect, { forceGemini: true });
+      });
+      actions.appendChild(geminiBtn);
+    }
+
+    // Open Settings
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className   = 'tx-action-btn tx-open-settings-btn';
+    settingsBtn.textContent = '⚙ Settings';
+    settingsBtn.addEventListener('click', openSettings);
+    actions.appendChild(settingsBtn);
+
+    container.appendChild(actions);
+  }
+
+  function openSettings() {
+    hideAll();
+    const settingsPanel  = document.getElementById('settings-panel');
+    const settingsToggle = document.getElementById('settings-toggle');
+    if (settingsToggle && settingsPanel && !settingsPanel.classList.contains('settings-open')) {
+      settingsToggle.click();
+    }
+  }
+
+  // ── Result body ────────────────────────────────────────────────────────────
 
   function setBodyResult(result, sourceText) {
     txBody.innerHTML = '';
@@ -170,76 +311,81 @@
 
     if (result.entry) {
       const entry = result.entry;
-      const card = document.createElement('div');
-      card.className = 'tx-lex-card';
 
-      const title = document.createElement('div');
-      title.className = 'tx-lex-title';
-      title.textContent = entry.lemma || sourceText;
-      card.appendChild(title);
+      // Lemma + IPA
+      const lemmaRow = document.createElement('div');
+      lemmaRow.className = 'tx-lemma-row';
 
-      const pronunciation = firstPronunciation(entry);
-      if (pronunciation?.ipa) {
-        const ipa = document.createElement('div');
-        ipa.className = 'tx-lex-ipa';
-        ipa.textContent = pronunciation.ipa;
-        card.appendChild(ipa);
+      const lemmaEl = document.createElement('span');
+      lemmaEl.className   = 'tx-lemma';
+      lemmaEl.textContent = entry.lemma || sourceText;
+      lemmaRow.appendChild(lemmaEl);
+
+      const pron = firstPronunciation(entry);
+      if (pron?.ipa) {
+        const ipaEl = document.createElement('span');
+        ipaEl.className   = 'tx-ipa';
+        ipaEl.textContent = pron.ipa;
+        lemmaRow.appendChild(ipaEl);
       }
+      txBody.appendChild(lemmaRow);
 
-      if (entry.pos?.length) {
-        const posWrap = document.createElement('div');
-        posWrap.className = 'tx-lex-pos';
-        for (const pos of entry.pos.slice(0, 4)) {
+      // POS badges + source badge
+      const hasPOS    = (entry.pos || []).length > 0;
+      const srcLabel  = sourceBadgeLabel(result.source);
+      if (hasPOS || srcLabel) {
+        const badgeRow = document.createElement('div');
+        badgeRow.className = 'tx-badge-row';
+        for (const pos of (entry.pos || []).slice(0, 4)) {
           const badge = document.createElement('span');
-          badge.className = 'tx-lex-pos-badge';
+          badge.className   = 'tx-pos-badge';
           badge.textContent = pos;
-          posWrap.appendChild(badge);
+          badgeRow.appendChild(badge);
         }
-        card.appendChild(posWrap);
+        if (srcLabel) {
+          const srcBadge = document.createElement('span');
+          srcBadge.className   = 'tx-source-badge';
+          srcBadge.textContent = srcLabel;
+          badgeRow.appendChild(srcBadge);
+        }
+        txBody.appendChild(badgeRow);
       }
 
-      const meaning = document.createElement('p');
-      meaning.className = 'tx-result-text tx-lex-meaning';
-      meaning.textContent = translated;
-      card.appendChild(meaning);
+      // Vietnamese meaning (prominent)
+      if (translated) {
+        const viEl = document.createElement('p');
+        viEl.className   = 'tx-vi-meaning';
+        viEl.textContent = translated;
+        txBody.appendChild(viEl);
+      }
 
+      // English definition from first sense that has one
+      const firstDef = (entry.senses || []).find(s => s.enDefinition)?.enDefinition;
+      if (firstDef) {
+        const defEl = document.createElement('p');
+        defEl.className   = 'tx-en-def';
+        defEl.textContent = firstDef;
+        txBody.appendChild(defEl);
+      }
+
+      // Expandable senses
       const expanded = makeLexicalExpanded(entry);
       if (expanded.childElementCount) {
-        const moreBtn = document.createElement('button');
-        moreBtn.className = 'tx-action-btn tx-lex-more-btn';
-        moreBtn.textContent = 'More';
-        moreBtn.addEventListener('click', () => {
-          const hidden = expanded.classList.toggle('tx-hidden');
-          moreBtn.textContent = hidden ? 'More' : 'Less';
-          if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
-        });
-        card.appendChild(moreBtn);
-        card.appendChild(expanded);
+        txBody.appendChild(expanded);
       }
 
-      txBody.appendChild(card);
+      appendActions(txBody, translated, sourceText, result, entry.lemma || sourceText,
+        expanded.childElementCount ? expanded : null);
+
     } else {
+      // Simple Gemini result
       const p = document.createElement('p');
       p.className   = 'tx-result-text';
       p.textContent = translated;
       txBody.appendChild(p);
+
+      appendActions(txBody, translated, sourceText, result, sourceText, null);
     }
-
-    const actions = document.createElement('div');
-    actions.className = 'tx-actions';
-
-    const copyBtn = document.createElement('button');
-    copyBtn.className   = 'tx-action-btn tx-copy-btn';
-    copyBtn.textContent = 'Copy';
-    copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(translated).then(() => {
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy'; }, 1500);
-      }).catch(() => {});
-    });
-
-    actions.appendChild(copyBtn);
-    txBody.appendChild(actions);
   }
 
   function setBodyStreaming(translated) {
@@ -253,40 +399,52 @@
     p.textContent = translated;
   }
 
-  function setBodyError(errorType, errorMsg) {
+  function setBodyError(errorType, errorMsg, sourceText, retryFn) {
     txBody.innerHTML = '';
 
-    if (errorType === 'no-key') {
-      const msg = document.createElement('p');
-      msg.className   = 'tx-error-text';
-      msg.textContent = 'No Gemini API key configured. Add your Gemini API key in Settings.';
-      txBody.appendChild(msg);
+    const msg = document.createElement('p');
+    msg.className   = 'tx-error-text';
 
-      const openSettingsBtn = document.createElement('button');
-      openSettingsBtn.className   = 'tx-action-btn tx-open-settings-btn';
-      openSettingsBtn.textContent = '⚙ Open Settings';
-      openSettingsBtn.addEventListener('click', () => {
-        hideAll();
-        const settingsPanel  = document.getElementById('settings-panel');
-        const settingsToggle = document.getElementById('settings-toggle');
-        if (settingsToggle && settingsPanel && !settingsPanel.classList.contains('settings-open')) {
-          settingsToggle.click();
-        }
-      });
-      txBody.appendChild(openSettingsBtn);
+    if (errorType === 'no-key') {
+      msg.textContent = 'No Gemini API key configured. Add your key in Settings.';
     } else {
-      const msg = document.createElement('p');
-      msg.className   = 'tx-error-text';
-      msg.textContent = errorMsg;
-      txBody.appendChild(msg);
+      msg.textContent = errorMsg || 'Translation failed.';
+    }
+    txBody.appendChild(msg);
+
+    const actions = document.createElement('div');
+    actions.className = 'tx-actions';
+
+    if (errorType !== 'no-key' && errorType !== 'offline-miss' && retryFn) {
+      const retryBtn = document.createElement('button');
+      retryBtn.className   = 'tx-action-btn tx-retry-btn';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', retryFn);
+      actions.appendChild(retryBtn);
     }
 
+    if (errorType === 'offline-miss') {
+      const geminiBtn = document.createElement('button');
+      geminiBtn.className   = 'tx-action-btn tx-retry-btn';
+      geminiBtn.textContent = 'Ask Gemini';
+      geminiBtn.title = 'Try Gemini API translation';
+      geminiBtn.addEventListener('click', () => {
+        if (openRect) openPopup(sourceText, openRect, { forceGemini: true });
+      });
+      actions.appendChild(geminiBtn);
+    }
+
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className   = 'tx-action-btn tx-open-settings-btn';
+    settingsBtn.textContent = '⚙ Settings';
+    settingsBtn.addEventListener('click', openSettings);
+    actions.appendChild(settingsBtn);
+
+    txBody.appendChild(actions);
   }
 
   // ── Selection helper ───────────────────────────────────────────────────────
 
-  // Returns { text, rect } when the selection is non-empty and inside a
-  // .textLayer element; null otherwise.
   function getLayerSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return null;
@@ -308,15 +466,14 @@
     return { text, rect };
   }
 
-  // ── Pointer-down: dismiss stale UI before any new gesture ─────────────────
+  // ── Pointer-down: dismiss stale UI ────────────────────────────────────────
 
   document.addEventListener('pointerdown', (e) => {
     if (e.target.closest('#tx-btn') || e.target.closest('#tx-popup')) return;
     hideAll();
   });
 
-  // ── Mouse-up: show translate button after a drag-selection ────────────────
-  // Selection is finalised by mouseup time, so no setTimeout is needed.
+  // ── Mouse-up: show translate button ──────────────────────────────────────
 
   document.addEventListener('mouseup', (e) => {
     if (e.target.closest('#tx-btn') || e.target.closest('#tx-popup')) return;
@@ -328,7 +485,7 @@
     place(txBtn, result.rect);
   });
 
-  // ── Translate button click → open popup and translate ─────────────────────
+  // ── Translate button click ────────────────────────────────────────────────
 
   txBtn.addEventListener('click', () => {
     if (!pending) { hideTxBtn(); return; }
@@ -353,16 +510,15 @@
 
   const MAX_PREVIEW = 120;
 
-  async function openPopup(text, rect) {
-    const myGen = ++popupGeneration; // capture before any await
-    openRect = rect;
+  async function openPopup(text, rect, opts) {
+    const myGen = ++popupGeneration;
+    openRect    = rect;
 
     const preview = text.length > MAX_PREVIEW
       ? text.slice(0, MAX_PREVIEW).trimEnd() + '…'
       : text;
     txSourceText.textContent = preview;
 
-    // Fast pre-check for length: avoid loading state for a purely local error.
     const normalized = text.replace(/\s+/g, ' ').trim();
     if (normalized.length > window.Translator.MAX_CHARS) {
       txBody.innerHTML = '';
@@ -378,64 +534,54 @@
       return;
     }
 
-    // Show loading state immediately, then fire the API call.
-    // translate() checks L1 → L2 → API and deduplicates concurrent requests.
     setBodyLoading();
     hidePopup();
     place(txPopup, rect);
 
-    const result = await window.Translator.translate(text, {
-      mode: 'interactive',
-      preferStreaming: !/^[\p{L}\p{N}_]+(?:['\u2019\u2018\-\u2010\u2011][\p{L}\p{N}_]+)*$/u.test(normalized),
+    const isSingle = /^[\p{L}\p{N}_]+(?:['''\-‐‑][\p{L}\p{N}_]+)*$/u.test(normalized);
+    const result   = await window.Translator.translate(text, {
+      mode:            'interactive',
+      preferStreaming: !isSingle,
+      forceGemini:     !!(opts && opts.forceGemini),
       onPartial: (partial) => {
         if (myGen !== popupGeneration) return;
         if (txPopup.classList.contains('tx-hidden')) return;
         setBodyStreaming(partial);
-        if (openRect && !txPopup.classList.contains('tx-hidden')) {
-          rePlace(txPopup, openRect);
-        }
+        if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
       },
     });
 
-    // Discard stale result: a newer selection opened while we were waiting.
     if (myGen !== popupGeneration) return;
-    // Also discard if user manually dismissed the popup.
     if (txPopup.classList.contains('tx-hidden')) return;
 
     if (result.ok) {
       setBodyResult(result, text);
     } else {
-      setBodyError(result.errorType, result.errorMsg);
+      const retryFn = ['timeout', 'network', 'api', 'quota', 'auth'].includes(result.errorType)
+        ? () => openPopup(text, rect, opts)
+        : null;
+      setBodyError(result.errorType, result.errorMsg, text, retryFn);
     }
 
-    // Re-position now that the popup height has changed with the new content.
-    if (openRect && !txPopup.classList.contains('tx-hidden')) {
-      rePlace(txPopup, openRect);
-    }
+    if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
   }
 
   // ── Word-detection helpers (used by double-click) ─────────────────────────
 
   function isBaseWordChar(ch) {
-    // Unicode letters, digits, and underscore
     return /[\p{L}\p{N}_]/u.test(ch);
   }
 
   function isJoinerChar(ch) {
-    // Straight apostrophe, right/left single quote, hyphen-minus,
-    // non-breaking hyphen, figure dash — joiners inside words
     return ch === "'" || ch === '’' || ch === '‘' ||
            ch === '-' || ch === '‐' || ch === '‑';
   }
 
-  // A joiner at str[idx] is part of a word only when flanked by word chars
-  // (e.g. "don't", "well-known") — prevents leading/trailing hyphens.
   function shouldIncludeJoiner(str, idx) {
     return idx > 0 && idx < str.length - 1 &&
            isBaseWordChar(str[idx - 1]) && isBaseWordChar(str[idx + 1]);
   }
 
-  // Expand from str[idx] to word boundaries; returns [start, end) offsets.
   function expandWordInString(str, idx) {
     if (!str || str.length === 0) return { start: 0, end: 0 };
     const safeIdx = Math.max(0, Math.min(idx, str.length - 1));
@@ -457,14 +603,12 @@
       } else break;
     }
 
-    // Strip any leading/trailing joiners that slipped through
     while (start < end && isJoinerChar(str[start]))   start++;
     while (end > start && isJoinerChar(str[end - 1])) end--;
 
     return { start, end };
   }
 
-  // Cross-browser caret range at a viewport point
   function getCaretRangeFromPoint(x, y) {
     if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
     if (document.caretPositionFromPoint) {
@@ -478,7 +622,6 @@
     return null;
   }
 
-  // Apply a Range as the current window selection (for visual highlight)
   function selectRange(range) {
     const sel = window.getSelection();
     if (!sel) return;
@@ -487,8 +630,6 @@
   }
 
   // ── Strategy A — native browser double-click selection ────────────────────
-  // The browser selects a token after dblclick; accept it only when it looks
-  // like a clean single word (no embedded whitespace, short enough).
 
   function getNativeDoubleClickSelection() {
     const sel = window.getSelection();
@@ -506,14 +647,12 @@
 
   function isGoodDoubleClickSelection(text, rect) {
     if (!text || text.length > 80) return false;
-    if (/\s/.test(text)) return false; // multi-word or contains spaces → skip
+    if (/\s/.test(text)) return false;
     if (!rect || (rect.width === 0 && rect.height === 0)) return false;
     return true;
   }
 
   // ── Strategy B — caret position → word expansion within one text node ─────
-  // Returns { text, rect, atBoundary } or null.
-  // atBoundary=true means the word may continue into a neighbouring span.
 
   function getWordFromPoint(clientX, clientY) {
     const caretRange = getCaretRangeFromPoint(clientX, clientY);
@@ -538,18 +677,12 @@
       selectRange(wordRange);
       const rect = wordRange.getBoundingClientRect();
       if (!rect || (rect.width === 0 && rect.height === 0)) return null;
-      // Word touches a span edge → likely truncated by PDF.js span split
       const atBoundary = (start === 0 || end === str.length);
       return { text: wordText, rect, atBoundary };
     } catch (_) { return null; }
   }
 
   // ── Strategy C — same-line multi-span reconstruction ─────────────────────
-  // PDF.js sometimes splits a single word across adjacent spans (kerning,
-  // font changes). This strategy collects all spans on the same visual line,
-  // builds a character map with approximate x-centres, finds the character
-  // nearest to the click, expands to word boundaries across span borders,
-  // then reconstructs a DOM Range spanning however many spans are needed.
 
   function getWordFromSpanLine(clickedSpan, clientX) {
     const textLayer = clickedSpan.closest('.textLayer');
@@ -558,21 +691,18 @@
     const cr = clickedSpan.getBoundingClientRect();
     if (!cr || cr.height === 0) return null;
 
-    // Gather spans whose vertical midpoint overlaps this line (±35 % of height)
     const tol = cr.height * 0.35;
     const lineSpans = Array.from(textLayer.querySelectorAll('span')).filter(s => {
       const r = s.getBoundingClientRect();
       return r.width > 0 && r.height > 0 &&
-             r.top  < cr.bottom - tol &&
+             r.top    < cr.bottom - tol &&
              r.bottom > cr.top   + tol;
     });
 
-    // Sort left-to-right
     lineSpans.sort((a, b) =>
       a.getBoundingClientRect().left - b.getBoundingClientRect().left
     );
 
-    // Build per-character position map (uniform-width approximation per span)
     const charMap = [];
     for (const s of lineSpans) {
       const txt = s.textContent;
@@ -585,7 +715,6 @@
     }
     if (!charMap.length) return null;
 
-    // Find the character whose centre is closest to the click x
     let nearestIdx = 0;
     let minDist    = Infinity;
     for (let i = 0; i < charMap.length; i++) {
@@ -621,20 +750,15 @@
   }
 
   // ── Double-click: select word and show popup directly ─────────────────────
-  // Strategy A → B → C waterfall; each strategy falls through if it cannot
-  // produce a clean result. The browser commits the word selection AFTER
-  // dblclick fires, so setTimeout(0) reads the finalised state.
 
   document.addEventListener('dblclick', (e) => {
-    // Cancel any translate button that mouseup may have shown for the partial
-    // selection produced by the second mouseup before dblclick fired.
     hideTxBtn();
     pending = null;
 
     const clientX = e.clientX;
     const clientY = e.clientY;
-    const hasGeometry = window.PdfViewerState?.hasUsableTextGeometryAtPoint?.(clientX, clientY);
-    const geometryHit = window.PdfViewerState?.findWordAtPoint?.(clientX, clientY);
+    const hasGeometry  = window.PdfViewerState?.hasUsableTextGeometryAtPoint?.(clientX, clientY);
+    const geometryHit  = window.PdfViewerState?.findWordAtPoint?.(clientX, clientY);
     if (geometryHit?.text && geometryHit.rect) {
       e.preventDefault();
       window.getSelection()?.removeAllRanges();
@@ -653,35 +777,29 @@
     if (!span) return;
 
     setTimeout(() => {
-      // Strategy A — accept the native browser selection when it is clean
       const nativeSel = getNativeDoubleClickSelection();
       if (nativeSel && isGoodDoubleClickSelection(nativeSel.text, nativeSel.rect)) {
         openPopup(nativeSel.text, nativeSel.rect);
         return;
       }
 
-      // Strategy B — caret-based expansion within a single text node
       const bResult = getWordFromPoint(clientX, clientY);
       if (bResult && !bResult.atBoundary) {
-        // Word is fully inside one span; use it directly
         openPopup(bResult.text, bResult.rect);
         return;
       }
 
-      // Strategy C — multi-span line reconstruction for split words
       const cResult = getWordFromSpanLine(span, clientX);
       if (cResult) {
         openPopup(cResult.text, cResult.rect);
         return;
       }
 
-      // B result as fallback when C also failed (at-boundary but best we have)
       if (bResult) {
         openPopup(bResult.text, bResult.rect);
         return;
       }
 
-      // Last resort: full text of the clicked span
       const spanText = span.textContent.trim();
       if (spanText) openPopup(spanText, span.getBoundingClientRect());
     }, 0);

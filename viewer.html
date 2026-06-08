@@ -89,15 +89,11 @@
           <span>Enable Gemini fallback for missing words/phrases</span>
         </label>
         <label class="settings-check">
-          <input type="checkbox" id="settings-prefetch">
-          <span>Enable background prefetch (uses extra Gemini quota)</span>
-        </label>
-        <label class="settings-check">
           <input type="checkbox" id="settings-streaming">
           <span>Enable streaming responses for sentences</span>
         </label>
         <p class="settings-note">
-          Offline dictionary and cache do not consume quota. Gemini is only used for fallback misses; keep prefetch off for free tier.
+          Offline dictionary and cache do not consume Gemini quota. Gemini is only called on explicit translation requests.
         </p>
       </div>
 

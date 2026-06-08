@@ -296,53 +296,60 @@ body {
   display: none !important;
 }
 
+/* ── Translate button ── */
+
 #tx-btn {
   position: fixed;
   z-index: 500;
-  padding: 4px 12px;
-  background: #1e40af;
+  padding: 5px 13px;
+  background: #2563eb;
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: 5px;
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
   white-space: nowrap;
   line-height: 1.5;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
   user-select: none;
 }
 
 #tx-btn:hover  { background: #1d4ed8; }
 #tx-btn:active { background: #1e3a8a; }
 
+/* ── Popup shell ── */
+
 #tx-popup {
   position: fixed;
   z-index: 600;
-  width: 300px;
-  background: #0f172a;
-  border: 1px solid #1e3a5f;
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  width: 450px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(37, 99, 235, 0.10), 0 2px 8px rgba(0, 0, 0, 0.07);
   overflow: hidden;
   font-size: 13px;
-  color: #e2e8f0;
+  color: #1e293b;
+  font-family: inherit;
 }
+
+/* ── Header ── */
 
 .tx-head {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 8px 10px;
-  background: #1e293b;
-  border-bottom: 1px solid #1e3a5f;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #eff6ff;
+  border-bottom: 1px solid #dbeafe;
 }
 
 .tx-source-text {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
-  color: #94a3b8;
+  font-size: 11.5px;
+  color: #475569;
   line-height: 1.4;
   word-break: break-word;
 }
@@ -351,22 +358,28 @@ body {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: #64748b;
+  color: #94a3b8;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1;
-  padding: 0 2px;
+  padding: 1px 3px;
   font-family: inherit;
+  border-radius: 3px;
 }
 
-.tx-close-btn:hover { color: #e2e8f0; }
+.tx-close-btn:hover {
+  color: #374151;
+  background: #dbeafe;
+}
+
+/* ── Body ── */
 
 .tx-body {
-  padding: 10px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 260px;
+  gap: 7px;
+  max-height: 420px;
   overflow-y: auto;
 }
 
@@ -376,140 +389,234 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #94a3b8;
-  font-size: 12px;
-  padding: 4px 0;
+  color: #64748b;
+  font-size: 12.5px;
+  padding: 6px 0;
 }
 
 .tx-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.15);
-  border-top-color: #93c5fd;
+  width: 15px;
+  height: 15px;
+  border: 2px solid #dbeafe;
+  border-top-color: #2563eb;
   border-radius: 50%;
   flex-shrink: 0;
-  animation: tx-spin 0.7s linear infinite;
+  animation: tx-spin 0.75s linear infinite;
 }
 
 @keyframes tx-spin {
   to { transform: rotate(360deg); }
 }
 
-/* ── Result state ── */
+/* ── Lexical card layout ── */
 
-.tx-result-text {
-  margin: 0;
-  line-height: 1.6;
-  color: #e2e8f0;
-  font-size: 13px;
-  word-break: break-word;
-}
-
-.tx-lex-card {
+.tx-lemma-row {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-.tx-lex-title {
-  color: #f8fafc;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.25;
+.tx-lemma {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
 }
 
-.tx-lex-ipa {
-  color: #93c5fd;
-  font-size: 12px;
+.tx-ipa {
+  font-size: 13px;
+  color: #2563eb;
+  font-style: italic;
   line-height: 1.3;
 }
 
-.tx-lex-pos {
+.tx-badge-row {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  align-items: center;
 }
 
-.tx-lex-pos-badge {
-  padding: 1px 5px;
-  border: 1px solid #334155;
-  border-radius: 3px;
-  color: #cbd5e1;
-  font-size: 10px;
-  line-height: 1.4;
-}
-
-.tx-lex-expanded {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 2px;
-}
-
-.tx-lex-sense {
-  border-top: 1px solid #1e3a5f;
-  padding-top: 7px;
-}
-
-.tx-lex-sense-heading {
-  color: #e2e8f0;
-  font-size: 12px;
+.tx-pos-badge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 10.5px;
   font-weight: 600;
   line-height: 1.4;
 }
 
-.tx-lex-definition,
-.tx-lex-example,
-.tx-lex-row {
-  margin: 3px 0 0;
-  color: #94a3b8;
-  font-size: 11px;
-  line-height: 1.45;
+.tx-source-badge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
-.tx-lex-example {
-  color: #cbd5e1;
+/* Vietnamese meaning (prominent) */
+.tx-vi-meaning {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* English definition (subdued) */
+.tx-en-def {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* Simple Gemini/idb result text */
+.tx-result-text {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: #0f172a;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ── Expandable senses ── */
+
+.tx-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tx-sense {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+}
+
+.tx-sense-heading {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #374151;
+  line-height: 1.4;
+}
+
+.tx-sense-def {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: #6b7280;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.tx-sense-example {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: #4b5563;
+  line-height: 1.4;
+}
+
+.tx-sense-row {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
 }
 
 /* ── Error state ── */
 
 .tx-error-text {
   margin: 0;
+  font-size: 12.5px;
+  color: #dc2626;
   line-height: 1.5;
-  color: #fca5a5;
-  font-size: 12px;
   word-break: break-word;
 }
 
-/* ── Action buttons ── */
+/* ── Action strip ── */
 
 .tx-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
+  margin-top: 2px;
 }
 
 .tx-action-btn {
-  padding: 3px 10px;
-  border: 1px solid #334155;
-  border-radius: 4px;
-  background: #1e293b;
-  color: #94a3b8;
-  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: #374151;
+  font-size: 11.5px;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
-  line-height: 1.5;
+  line-height: 1.4;
   user-select: none;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
 }
 
-.tx-action-btn:hover  { background: #273548; color: #e2e8f0; }
-.tx-action-btn:active { background: #1e293b; }
+.tx-action-btn:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
 
-.tx-copy-btn:hover { color: #86efac; border-color: #166534; }
+.tx-action-btn:active {
+  background: #dbeafe;
+}
 
-.tx-open-settings-btn { color: #fbbf24; }
-.tx-open-settings-btn:hover { color: #fcd34d; border-color: #92400e; }
+.tx-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Copy done state */
+.tx-copy-btn--done {
+  border-color: #bbf7d0;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+/* Save toggled state */
+.tx-save-btn--saved {
+  border-color: #fde68a;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+/* Retry / Ask Gemini */
+.tx-retry-btn {
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+
+.tx-retry-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+/* Settings */
+.tx-open-settings-btn {
+  color: #7c3aed;
+  border-color: #ddd6fe;
+}
+
+.tx-open-settings-btn:hover {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+  color: #6d28d9;
+}
 
 /* ── Settings toggle button (in toolbar) ─────────────────────────────────── */
 

@@ -14,7 +14,6 @@
   const modelInput  = document.getElementById('settings-model');
   const offlineDictionaryInput = document.getElementById('settings-offline-dictionary');
   const geminiFallbackInput = document.getElementById('settings-gemini-fallback');
-  const prefetchInput  = document.getElementById('settings-prefetch');
   const streamingInput = document.getElementById('settings-streaming');
   const saveBtn       = document.getElementById('settings-save');
   const clearBtn      = document.getElementById('settings-clear');
@@ -74,7 +73,6 @@
     modelInput.value  = s.model || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash-lite';
     offlineDictionaryInput.checked = s.enableOfflineDictionary !== false;
     geminiFallbackInput.checked = s.enableGeminiFallback !== false;
-    prefetchInput.checked = s.enablePrefetch === true;
     streamingInput.checked = s.enableStreaming !== false;
     setKeyIndicator(!!s.apiKey);
   }
@@ -99,7 +97,6 @@
     const model      = modelInput.value.trim()  || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash-lite';
     const enableOfflineDictionary = offlineDictionaryInput.checked;
     const enableGeminiFallback = geminiFallbackInput.checked;
-    const enablePrefetch = prefetchInput.checked;
     const enableStreaming = streamingInput.checked;
     await window.Translator.saveSettings({
       apiKey,
@@ -108,7 +105,6 @@
       model,
       enableOfflineDictionary,
       enableGeminiFallback,
-      enablePrefetch,
       enableStreaming,
     });
     setKeyIndicator(!!apiKey);

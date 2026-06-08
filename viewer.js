@@ -609,21 +609,6 @@ function getVisibleWordTexts(extraPages = 1) {
   return words;
 }
 
-let prefetchScheduleTimer = null;
-
-function scheduleVisibleWordPrefetch(delay = 2000) {
-  if (prefetchScheduleTimer) clearTimeout(prefetchScheduleTimer);
-  prefetchScheduleTimer = setTimeout(() => {
-    prefetchScheduleTimer = null;
-    const words = getVisibleWordTexts(1);
-    if (words.length) {
-      document.dispatchEvent(new CustomEvent('pdf-visible-words', {
-        detail: { words },
-      }));
-    }
-  }, delay);
-}
-
 window.PdfViewerState = {
   getPageSlotFromPoint,
   getPageLocalPoint,
@@ -727,7 +712,6 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
       slot.textGeometryGeneration = generation;
       slot.textGeometryZoom = zoom;
       drawGeometryDebug(slot);
-      scheduleVisibleWordPrefetch(2000);
 
       const textTask = pdfjsLib.renderTextLayer({
         textContentSource: textContent,   // direct TextContent object → sync path
@@ -761,7 +745,6 @@ function scheduleVisiblePages() {
       scheduleRender(i);
     }
   }
-  scheduleVisibleWordPrefetch(2000);
 }
 
 // ── PDF load orchestrator ──────────────────────────────────────────────────
@@ -965,6 +948,3 @@ zoomSelect.addEventListener('change', () => {
   // Kick off renders for everything currently on or near the screen.
   scheduleVisiblePages();
 });
-
-window.addEventListener('scroll', () => scheduleVisibleWordPrefetch(1000), { passive: true });
-window.addEventListener('resize', () => scheduleVisibleWordPrefetch(1000));
