@@ -8,6 +8,7 @@
     "download:sources": "node download-sources.js --config ./sources.json",
     "build:core": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --coreOut ../../dictionaries/en-vi-core.generated.json --limit 20000",
     "build:full": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000",
-    "build:all": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --coreOut ../../dictionaries/en-vi-core.generated.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000"
+    "build:all": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --coreOut ../../dictionaries/en-vi-core.generated.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000",
+    "audit:generated": "node audit-generated.js --core ../../dictionaries/en-vi-core.generated.json --full ../../dictionaries/en-vi-full.generated.jsonl"
   }
 }

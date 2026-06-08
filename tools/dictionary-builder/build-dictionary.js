@@ -223,7 +223,7 @@ function parseCmudict(filePath) {
   const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
   for (const line of lines) {
     if (!line.trim() || line.startsWith(';;;')) continue;
-    const match = line.match(/^(\S+)\s{2,}(.+)$/);
+    const match = line.match(/^(\S+)\s+(.+)$/);
     if (!match) continue;
     const lemma = normalizeLookupKey(match[1].replace(/\(\d+\)$/u, ''));
     const arpabet = cleanText(match[2], 120);
