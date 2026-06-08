@@ -12,6 +12,8 @@
   const targetInput = document.getElementById('settings-target-lang');
   const sourceInput = document.getElementById('settings-source-lang');
   const modelInput  = document.getElementById('settings-model');
+  const offlineDictionaryInput = document.getElementById('settings-offline-dictionary');
+  const geminiFallbackInput = document.getElementById('settings-gemini-fallback');
   const prefetchInput  = document.getElementById('settings-prefetch');
   const streamingInput = document.getElementById('settings-streaming');
   const saveBtn       = document.getElementById('settings-save');
@@ -46,7 +48,9 @@
     targetInput.value = s.targetLang;
     sourceInput.value = s.sourceLang === 'auto' ? '' : s.sourceLang;
     modelInput.value  = s.model || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash-lite';
-    prefetchInput.checked = s.enablePrefetch !== false;
+    offlineDictionaryInput.checked = s.enableOfflineDictionary !== false;
+    geminiFallbackInput.checked = s.enableGeminiFallback !== false;
+    prefetchInput.checked = s.enablePrefetch === true;
     streamingInput.checked = s.enableStreaming !== false;
     setKeyIndicator(!!s.apiKey);
   }
@@ -66,6 +70,8 @@
     const targetLang = targetInput.value.trim() || 'vi';
     const sourceLang = sourceInput.value.trim() || 'auto';
     const model      = modelInput.value.trim()  || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash-lite';
+    const enableOfflineDictionary = offlineDictionaryInput.checked;
+    const enableGeminiFallback = geminiFallbackInput.checked;
     const enablePrefetch = prefetchInput.checked;
     const enableStreaming = streamingInput.checked;
     await window.Translator.saveSettings({
@@ -73,6 +79,8 @@
       targetLang,
       sourceLang,
       model,
+      enableOfflineDictionary,
+      enableGeminiFallback,
       enablePrefetch,
       enableStreaming,
     });

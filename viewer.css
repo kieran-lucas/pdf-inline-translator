@@ -405,6 +405,72 @@ body {
   word-break: break-word;
 }
 
+.tx-lex-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tx-lex-title {
+  color: #f8fafc;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.tx-lex-ipa {
+  color: #93c5fd;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.tx-lex-pos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tx-lex-pos-badge {
+  padding: 1px 5px;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  color: #cbd5e1;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.tx-lex-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.tx-lex-sense {
+  border-top: 1px solid #1e3a5f;
+  padding-top: 7px;
+}
+
+.tx-lex-sense-heading {
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tx-lex-definition,
+.tx-lex-example,
+.tx-lex-row {
+  margin: 3px 0 0;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.tx-lex-example {
+  color: #cbd5e1;
+}
+
 /* ── Error state ── */
 
 .tx-error-text {
@@ -530,6 +596,13 @@ body {
 .settings-check input {
   margin: 0;
   accent-color: #3b82f6;
+}
+
+.settings-note {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .settings-lang-group {

@@ -10,6 +10,8 @@ window.Translator = (() => {
   const KEY_TARGET    = 'tx_target_lang';
   const KEY_SOURCE    = 'tx_source_lang';
   const KEY_MODEL     = 'tx_gemini_model';
+  const KEY_OFFLINE_DICTIONARY = 'tx_offline_dictionary_enabled';
+  const KEY_GEMINI_FALLBACK = 'tx_gemini_fallback_enabled';
   const KEY_PREFETCH  = 'tx_prefetch_enabled';
   const KEY_STREAMING = 'tx_streaming_enabled';
 
@@ -18,9 +20,20 @@ window.Translator = (() => {
   const GEMINI_BASE_URL     = 'https://generativelanguage.googleapis.com/v1beta/models/';
   const MAX_CHARS           = 2000;
   const TIMEOUT_MS          = 15_000;
-  const PREFETCH_BATCH_MAX  = 40;
-  const PREFETCH_INTERVAL   = 2500;
-  const PREFETCH_429_PAUSE  = 60_000;
+  const PREFETCH_BATCH_MAX  = 8;
+  const PREFETCH_INTERVAL   = 15_000;
+  const PREFETCH_429_PAUSE  = 30 * 60_000;
+  const PREFETCH_QUEUE_MAX  = 32;
+  const PREFETCH_EVENT_MAX  = 20;
+  const MAX_PREFETCH_WORDS_PER_SESSION = 80;
+  const MAX_PREFETCH_BATCHES_PER_SESSION = 10;
+
+  const PREFETCH_STOPWORDS = new Set([
+    'the', 'and', 'for', 'are', 'but', 'not', 'you', 'your', 'this', 'that',
+    'with', 'from', 'have', 'has', 'had', 'was', 'were', 'will', 'would',
+    'can', 'could', 'should', 'may', 'might', 'into', 'onto', 'than', 'then',
+    'there', 'their', 'they', 'them', 'these', 'those', 'about', 'between',
+  ]);
 
   function perf(...args) {
     if (DEBUG_TRANSLATION_PERF) console.debug('[tx-perf]', ...args);
@@ -35,7 +48,10 @@ window.Translator = (() => {
   }
 
   function isPrefetchWord(text) {
-    return /^[\p{L}\p{N}_-]{3,24}$/u.test(text) && !/^\d+$/.test(text);
+    return /^[\p{L}\p{N}_-]{4,20}$/u.test(text) &&
+      !/^\d+$/.test(text) &&
+      !/^[._\-]+$/.test(text) &&
+      !PREFETCH_STOPWORDS.has(text);
   }
 
   function makeCacheKey(normalizedText, sourceLang, targetLang, model) {
@@ -48,14 +64,25 @@ window.Translator = (() => {
     if (settingsCache) return Promise.resolve(settingsCache);
     return new Promise(resolve => {
       chrome.storage.local.get(
-        [KEY_APIKEY, KEY_TARGET, KEY_SOURCE, KEY_MODEL, KEY_PREFETCH, KEY_STREAMING],
+        [
+          KEY_APIKEY,
+          KEY_TARGET,
+          KEY_SOURCE,
+          KEY_MODEL,
+          KEY_OFFLINE_DICTIONARY,
+          KEY_GEMINI_FALLBACK,
+          KEY_PREFETCH,
+          KEY_STREAMING,
+        ],
         result => {
           settingsCache = {
             apiKey: result[KEY_APIKEY] || '',
             targetLang: result[KEY_TARGET] || 'vi',
             sourceLang: result[KEY_SOURCE] || 'auto',
             model: result[KEY_MODEL] || DEFAULT_MODEL,
-            enablePrefetch: result[KEY_PREFETCH] !== false,
+            enableOfflineDictionary: result[KEY_OFFLINE_DICTIONARY] !== false,
+            enableGeminiFallback: result[KEY_GEMINI_FALLBACK] !== false,
+            enablePrefetch: result[KEY_PREFETCH] === true,
             enableStreaming: result[KEY_STREAMING] !== false,
           };
           resolve(settingsCache);
@@ -64,14 +91,25 @@ window.Translator = (() => {
     });
   }
 
-  function saveSettings({ apiKey, targetLang, sourceLang, model, enablePrefetch, enableStreaming }) {
+  function saveSettings({
+    apiKey,
+    targetLang,
+    sourceLang,
+    model,
+    enableOfflineDictionary,
+    enableGeminiFallback,
+    enablePrefetch,
+    enableStreaming,
+  }) {
     return new Promise(resolve => {
       const data = {
         [KEY_APIKEY]: apiKey !== undefined ? apiKey : '',
         [KEY_TARGET]: targetLang !== undefined ? targetLang : 'vi',
         [KEY_SOURCE]: sourceLang !== undefined ? sourceLang : 'auto',
         [KEY_MODEL]: model !== undefined ? model : DEFAULT_MODEL,
-        [KEY_PREFETCH]: enablePrefetch !== undefined ? !!enablePrefetch : true,
+        [KEY_OFFLINE_DICTIONARY]: enableOfflineDictionary !== undefined ? !!enableOfflineDictionary : true,
+        [KEY_GEMINI_FALLBACK]: enableGeminiFallback !== undefined ? !!enableGeminiFallback : true,
+        [KEY_PREFETCH]: enablePrefetch !== undefined ? !!enablePrefetch : false,
         [KEY_STREAMING]: enableStreaming !== undefined ? !!enableStreaming : true,
       };
       chrome.storage.local.set(data, () => {
@@ -80,6 +118,8 @@ window.Translator = (() => {
           targetLang: data[KEY_TARGET],
           sourceLang: data[KEY_SOURCE],
           model: data[KEY_MODEL],
+          enableOfflineDictionary: data[KEY_OFFLINE_DICTIONARY],
+          enableGeminiFallback: data[KEY_GEMINI_FALLBACK],
           enablePrefetch: data[KEY_PREFETCH],
           enableStreaming: data[KEY_STREAMING],
         };
@@ -108,10 +148,10 @@ window.Translator = (() => {
     return val;
   }
 
-  function l1Set(key, translated, source = 'memory') {
+  function l1Set(key, translated, source = 'memory', entry = null) {
     if (l1.has(key)) l1.delete(key);
     else if (l1.size >= L1_MAX) l1.delete(l1.keys().next().value);
-    l1.set(key, { translated, source });
+    l1.set(key, { translated, source, entry });
   }
 
   const IDB_NAME = 'pdf-tx-cache';
@@ -200,8 +240,14 @@ window.Translator = (() => {
     } catch {}
   }
 
-  function dictionaryLookup(text, settings) {
-    return window.LocalDictionary?.lookup?.(text, settings.sourceLang, settings.targetLang) || null;
+  async function lexicalLookup(text, settings) {
+    if (!settings.enableOfflineDictionary || !isSingleWord(text)) return null;
+    const result = await window.LexicalDB?.lookupWord?.(text, {
+      sourceLang: settings.sourceLang,
+      targetLang: settings.targetLang,
+      allowFullLookup: true,
+    });
+    return result?.ok ? result : null;
   }
 
   function maxTokensFor(text) {
@@ -269,23 +315,31 @@ window.Translator = (() => {
     const key = makeCacheKey(cacheText, settings.sourceLang, settings.targetLang, model);
 
     const l1Hit = l1Get(key);
-    if (l1Hit !== null) {
+    if (l1Hit !== null && (!l1Hit.entry || settings.enableOfflineDictionary)) {
       perf('l1 hit', text, Math.round(performance.now() - t0) + 'ms');
       return {
         ok: true,
         translated: l1Hit.translated,
         settings,
-        fromCache: l1Hit.source === 'prefetch' ? 'prefetch' : 'memory',
+        fromCache: l1Hit.entry ? 'dictionary' : (l1Hit.source === 'prefetch' ? 'prefetch' : 'memory'),
         source: l1Hit.source,
+        entry: l1Hit.entry || undefined,
       };
     }
 
-    const dictHit = dictionaryLookup(text, settings);
+    const dictHit = await lexicalLookup(text, settings);
     if (dictHit) {
-      l1Set(key, dictHit, 'dictionary');
-      idbSet(key, dictHit);
+      const compactMeaning = dictHit.compactMeaning || '';
+      l1Set(key, compactMeaning, dictHit.source || 'dictionary', dictHit.entry || null);
       perf('dictionary hit', text);
-      return { ok: true, translated: dictHit, settings, fromCache: 'dictionary', source: 'dictionary' };
+      return {
+        ok: true,
+        translated: compactMeaning,
+        settings,
+        fromCache: 'dictionary',
+        source: dictHit.source,
+        entry: dictHit.entry,
+      };
     }
 
     const l2Hit = await idbGet(key);
@@ -303,6 +357,15 @@ window.Translator = (() => {
         perf('prefetch attach hit', text);
         return { ok: true, translated: warmed.translated, settings, fromCache: 'prefetch', source: warmed.source };
       }
+    }
+
+    if (!settings.enableGeminiFallback) {
+      return {
+        ok: false,
+        errorType: 'offline-miss',
+        errorMsg: 'Not found in offline dictionary. Enable Gemini fallback to translate this.',
+        settings,
+      };
     }
 
     if (!settings.apiKey) {
@@ -325,7 +388,7 @@ window.Translator = (() => {
     const start = performance.now();
     let result = null;
 
-    if (settings.enableStreaming && options.onPartial) {
+    if (!isSingleWord(text) && settings.enableStreaming && options.onPartial) {
       result = await callGeminiStream(text, key, settings, model, options);
       if (result?.ok || !result?.retryNormal) {
         if (result?.ok) perf('stream duration', Math.round(performance.now() - start) + 'ms');
@@ -499,6 +562,7 @@ window.Translator = (() => {
     }
     if (status === 429) {
       prefetchPausedUntil = Date.now() + PREFETCH_429_PAUSE;
+      prefetchDisabledByQuota = true;
       perf('429 pause prefetch', PREFETCH_429_PAUSE + 'ms');
       return { ok: false, status, errorType: 'quota', errorMsg: 'Gemini free-tier rate limit reached. Try again later.', settings };
     }
@@ -517,6 +581,9 @@ window.Translator = (() => {
   let prefetchTimer = null;
   let lastPrefetchAt = 0;
   let prefetchPausedUntil = 0;
+  let prefetchDisabledByQuota = false;
+  let prefetchWordsThisSession = 0;
+  let prefetchBatchesThisSession = 0;
   let lastScrollAt = 0;
 
   window.addEventListener('scroll', () => {
@@ -535,7 +602,7 @@ window.Translator = (() => {
     const text = normalize(word);
     const key = makeCacheKey(text, settings.sourceLang, settings.targetLang, settings.model || DEFAULT_MODEL);
     if (l1Get(key) !== null) return true;
-    if (dictionaryLookup(text, settings)) return true;
+    if (await lexicalLookup(text, settings)) return true;
     const hit = await idbGet(key);
     if (hit !== null) {
       l1Set(key, hit, 'idb');
@@ -546,8 +613,24 @@ window.Translator = (() => {
 
   function queuePrefetchWords(words) {
     if (!Array.isArray(words) || !words.length) return;
+    if (prefetchDisabledByQuota && Date.now() >= prefetchPausedUntil) {
+      prefetchDisabledByQuota = false;
+    }
     loadSettings().then(async settings => {
-      if (!settings.enablePrefetch || !settings.apiKey || settings.targetLang !== 'vi') return;
+      if (prefetchDisabledByQuota) {
+        perf('prefetch skipped: disabled by quota');
+        return;
+      }
+      if (prefetchWordsThisSession >= MAX_PREFETCH_WORDS_PER_SESSION ||
+          prefetchBatchesThisSession >= MAX_PREFETCH_BATCHES_PER_SESSION) {
+        perf('prefetch skipped: session budget exhausted');
+        return;
+      }
+      if (!settings.enablePrefetch) {
+        perf('prefetch disabled by default/settings');
+        return;
+      }
+      if (!settings.apiKey || settings.targetLang !== 'vi') return;
       const candidates = [];
       const seen = new Set();
       for (const raw of words) {
@@ -557,11 +640,11 @@ window.Translator = (() => {
         if (await hasCachedWord(word, settings)) continue;
         pendingPrefetch.add(word);
         candidates.push(word);
-        if (candidates.length >= PREFETCH_BATCH_MAX) break;
+        if (candidates.length >= PREFETCH_EVENT_MAX) break;
       }
       if (!candidates.length) return;
       prefetchQueue.push(...candidates);
-      prefetchQueue = Array.from(new Set(prefetchQueue)).slice(0, 160);
+      prefetchQueue = Array.from(new Set(prefetchQueue)).slice(0, PREFETCH_QUEUE_MAX);
       perf('prefetch queued word count', candidates.length);
       schedulePrefetch();
     }).catch(() => {});
@@ -572,13 +655,24 @@ window.Translator = (() => {
     scheduleIdle(() => {
       prefetchTimer = null;
       runPrefetchBatch().catch(() => {});
-    }, 1200);
+    }, 2000);
     prefetchTimer = true;
   }
 
   async function runPrefetchBatch() {
     const now = Date.now();
     if (!prefetchQueue.length) return;
+    if (prefetchDisabledByQuota && now >= prefetchPausedUntil) {
+      prefetchDisabledByQuota = false;
+    }
+    if (prefetchDisabledByQuota ||
+        prefetchWordsThisSession >= MAX_PREFETCH_WORDS_PER_SESSION ||
+        prefetchBatchesThisSession >= MAX_PREFETCH_BATCHES_PER_SESSION) {
+      perf('prefetch skipped: quota/session budget');
+      prefetchQueue = [];
+      pendingPrefetch.clear();
+      return;
+    }
     if (inFlight.size > 0 ||
         now < prefetchPausedUntil ||
         now - lastScrollAt < 450 ||
@@ -589,7 +683,8 @@ window.Translator = (() => {
 
     const settings = await loadSettings();
     if (!settings.enablePrefetch || !settings.apiKey) return;
-    const rawBatch = prefetchQueue.splice(0, PREFETCH_BATCH_MAX);
+    const remainingWords = MAX_PREFETCH_WORDS_PER_SESSION - prefetchWordsThisSession;
+    const rawBatch = prefetchQueue.splice(0, Math.min(PREFETCH_BATCH_MAX, remainingWords));
     const batch = [];
     for (const word of rawBatch) {
       if (await hasCachedWord(word, settings)) {
@@ -601,6 +696,8 @@ window.Translator = (() => {
     if (!batch.length) return;
 
     lastPrefetchAt = Date.now();
+    prefetchBatchesThisSession++;
+    prefetchWordsThisSession += batch.length;
     perf('prefetch batch size', batch.length);
     const batchPromise = callPrefetchBatch(batch, settings);
     for (const word of batch) prefetchPromises.set(word, batchPromise);
@@ -636,8 +733,13 @@ window.Translator = (() => {
 
     const data = await parseJsonResponse(response);
     if (!response.ok) {
-      if (response.status === 429) prefetchPausedUntil = Date.now() + PREFETCH_429_PAUSE;
-      if (response.status === 429) perf('429 pause prefetch', PREFETCH_429_PAUSE + 'ms');
+      if (response.status === 429) {
+        prefetchPausedUntil = Date.now() + PREFETCH_429_PAUSE;
+        prefetchDisabledByQuota = true;
+        prefetchQueue = [];
+        pendingPrefetch.clear();
+        perf('429 pause prefetch', PREFETCH_429_PAUSE + 'ms');
+      }
       return { ok: false };
     }
 
@@ -674,7 +776,7 @@ window.Translator = (() => {
         'Content-Type': 'application/json',
         'x-goog-api-key': settings.apiKey,
       },
-      body: requestBody(prompt, 512),
+      body: requestBody(prompt, 192),
     });
   }
 

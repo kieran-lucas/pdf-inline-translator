@@ -611,7 +611,7 @@ function getVisibleWordTexts(extraPages = 1) {
 
 let prefetchScheduleTimer = null;
 
-function scheduleVisibleWordPrefetch(delay = 600) {
+function scheduleVisibleWordPrefetch(delay = 2000) {
   if (prefetchScheduleTimer) clearTimeout(prefetchScheduleTimer);
   prefetchScheduleTimer = setTimeout(() => {
     prefetchScheduleTimer = null;
@@ -727,7 +727,7 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
       slot.textGeometryGeneration = generation;
       slot.textGeometryZoom = zoom;
       drawGeometryDebug(slot);
-      scheduleVisibleWordPrefetch();
+      scheduleVisibleWordPrefetch(2000);
 
       const textTask = pdfjsLib.renderTextLayer({
         textContentSource: textContent,   // direct TextContent object → sync path
@@ -761,7 +761,7 @@ function scheduleVisiblePages() {
       scheduleRender(i);
     }
   }
-  scheduleVisibleWordPrefetch(900);
+  scheduleVisibleWordPrefetch(2000);
 }
 
 // ── PDF load orchestrator ──────────────────────────────────────────────────

@@ -81,13 +81,24 @@
 
       <div class="settings-row settings-row-toggles">
         <label class="settings-check">
+          <input type="checkbox" id="settings-offline-dictionary">
+          <span>Enable offline dictionary (fast, no Gemini quota)</span>
+        </label>
+        <label class="settings-check">
+          <input type="checkbox" id="settings-gemini-fallback">
+          <span>Enable Gemini fallback for missing words/phrases</span>
+        </label>
+        <label class="settings-check">
           <input type="checkbox" id="settings-prefetch">
-          <span>Enable background prefetch</span>
+          <span>Enable background prefetch (uses extra Gemini quota)</span>
         </label>
         <label class="settings-check">
           <input type="checkbox" id="settings-streaming">
-          <span>Enable streaming responses</span>
+          <span>Enable streaming responses for sentences</span>
         </label>
+        <p class="settings-note">
+          Offline dictionary and cache do not consume quota. Gemini is only used for fallback misses; keep prefetch off for free tier.
+        </p>
       </div>
 
       <div class="settings-row settings-row-inline">
@@ -132,7 +143,7 @@
 
   <script src="lib/pdf.min.js"></script>
   <script src="viewer.js"></script>
-  <script src="local-dictionary.js"></script>
+  <script src="lexical-db.js"></script>
   <script src="translator.js"></script>
   <script src="settings.js"></script>
   <script src="selection.js"></script>

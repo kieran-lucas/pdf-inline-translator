@@ -134,13 +134,119 @@
       '</div>';
   }
 
-  function setBodyResult(translated, sourceText, settings) {
-    txBody.innerHTML = '';
+  function firstPronunciation(entry) {
+    return (entry?.pronunciations || []).find(p => p?.ipa || p?.audio) || null;
+  }
 
+  function appendTextList(parent, label, values) {
+    const clean = (values || []).filter(Boolean);
+    if (!clean.length) return;
     const p = document.createElement('p');
-    p.className   = 'tx-result-text';
-    p.textContent = translated;
-    txBody.appendChild(p);
+    p.className = 'tx-lex-row';
+    p.textContent = `${label}: ${clean.join(', ')}`;
+    parent.appendChild(p);
+  }
+
+  function makeLexicalExpanded(entry) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tx-lex-expanded tx-hidden';
+
+    for (const sense of entry?.senses || []) {
+      const block = document.createElement('div');
+      block.className = 'tx-lex-sense';
+
+      const heading = document.createElement('div');
+      heading.className = 'tx-lex-sense-heading';
+      heading.textContent = [
+        sense.pos,
+        ...(sense.viMeanings || []).slice(0, 3),
+      ].filter(Boolean).join(' · ');
+      block.appendChild(heading);
+
+      if (sense.enDefinition) {
+        const def = document.createElement('p');
+        def.className = 'tx-lex-definition';
+        def.textContent = sense.enDefinition;
+        block.appendChild(def);
+      }
+
+      for (const ex of (sense.examples || []).slice(0, 2)) {
+        const p = document.createElement('p');
+        p.className = 'tx-lex-example';
+        p.textContent = ex.vi ? `${ex.en} / ${ex.vi}` : ex.en;
+        block.appendChild(p);
+      }
+
+      appendTextList(block, 'Synonyms', sense.synonyms);
+      appendTextList(block, 'Antonyms', sense.antonyms);
+      appendTextList(block, 'Collocations', sense.collocations);
+      wrap.appendChild(block);
+    }
+
+    return wrap;
+  }
+
+  function setBodyResult(result, sourceText) {
+    txBody.innerHTML = '';
+    const translated = result.translated;
+    const settings = result.settings;
+
+    if (result.entry) {
+      const entry = result.entry;
+      const card = document.createElement('div');
+      card.className = 'tx-lex-card';
+
+      const title = document.createElement('div');
+      title.className = 'tx-lex-title';
+      title.textContent = entry.lemma || sourceText;
+      card.appendChild(title);
+
+      const pronunciation = firstPronunciation(entry);
+      if (pronunciation?.ipa) {
+        const ipa = document.createElement('div');
+        ipa.className = 'tx-lex-ipa';
+        ipa.textContent = pronunciation.ipa;
+        card.appendChild(ipa);
+      }
+
+      if (entry.pos?.length) {
+        const posWrap = document.createElement('div');
+        posWrap.className = 'tx-lex-pos';
+        for (const pos of entry.pos.slice(0, 4)) {
+          const badge = document.createElement('span');
+          badge.className = 'tx-lex-pos-badge';
+          badge.textContent = pos;
+          posWrap.appendChild(badge);
+        }
+        card.appendChild(posWrap);
+      }
+
+      const meaning = document.createElement('p');
+      meaning.className = 'tx-result-text tx-lex-meaning';
+      meaning.textContent = translated;
+      card.appendChild(meaning);
+
+      const expanded = makeLexicalExpanded(entry);
+      if (expanded.childElementCount) {
+        const moreBtn = document.createElement('button');
+        moreBtn.className = 'tx-action-btn tx-lex-more-btn';
+        moreBtn.textContent = 'More';
+        moreBtn.addEventListener('click', () => {
+          const hidden = expanded.classList.toggle('tx-hidden');
+          moreBtn.textContent = hidden ? 'More' : 'Less';
+          if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
+        });
+        card.appendChild(moreBtn);
+        card.appendChild(expanded);
+      }
+
+      txBody.appendChild(card);
+    } else {
+      const p = document.createElement('p');
+      p.className   = 'tx-result-text';
+      p.textContent = translated;
+      txBody.appendChild(p);
+    }
 
     const actions = document.createElement('div');
     actions.className = 'tx-actions';
@@ -324,7 +430,7 @@
     if (txPopup.classList.contains('tx-hidden')) return;
 
     if (result.ok) {
-      setBodyResult(result.translated, text, result.settings);
+      setBodyResult(result, text);
     } else {
       setBodyError(result.errorType, result.errorMsg, text, result.settings);
     }
