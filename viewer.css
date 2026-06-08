@@ -663,6 +663,54 @@ body {
 .settings-status-ok    { color: #86efac; }
 .settings-status-error { color: #fca5a5; }
 
+/* ── Full dictionary import section ──────────────────────────────────────── */
+
+.settings-subheading {
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.settings-dict-section {
+  border-top: 1px solid #1e3a5f;
+  padding-top: 10px;
+  gap: 8px;
+}
+
+.settings-dict-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-file-input {
+  font-size: 12px;
+  color: #94a3b8;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.settings-dict-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-dict-clear-btn {
+  background: #374151;
+}
+
+.settings-dict-clear-btn:hover  { background: #4b5563; }
+.settings-dict-clear-btn:active { background: #374151; }
+
+.settings-dict-status {
+  min-height: 1.2em;
+  font-style: italic;
+}
+
 /* ── Per-page render error ────────────────────────────────────────────────── */
 
 .page-error {

@@ -126,6 +126,25 @@
         </div>
       </div>
 
+      <div class="settings-row settings-dict-section">
+        <h3 class="settings-subheading">Full Offline Dictionary</h3>
+        <p class="settings-note">Import en-vi-full.generated.jsonl locally. This file is large and stays in IndexedDB. It is never uploaded.</p>
+        <div class="settings-dict-row">
+          <label for="settings-full-dict-file" class="settings-label">JSONL file</label>
+          <input
+            type="file"
+            id="settings-full-dict-file"
+            accept=".jsonl,application/jsonl,text/plain"
+            class="settings-file-input"
+          >
+        </div>
+        <div class="settings-dict-controls">
+          <button id="settings-full-dict-import" class="btn">Import Full Dictionary</button>
+          <button id="settings-full-dict-clear" class="btn settings-dict-clear-btn">Clear Full Dictionary</button>
+        </div>
+        <p id="settings-full-dict-status" class="settings-dict-status settings-note"></p>
+      </div>
+
       <div class="settings-actions">
         <button id="settings-save" class="btn">Save</button>
         <button id="settings-clear" class="btn settings-clear-btn">Clear Key</button>

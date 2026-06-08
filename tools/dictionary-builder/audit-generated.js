@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 
 function parseArgs(argv) {
   const args = {};
@@ -24,31 +25,40 @@ function formatBytes(bytes) {
 }
 
 function hasVi(entry) {
-  return (entry.senses || []).some(sense => (sense.viMeanings || []).length);
+  return (entry.senses || []).some(s => (s.viMeanings || []).length > 0);
 }
 
 function hasDefinition(entry) {
-  return (entry.senses || []).some(sense => sense.enDefinition);
+  return (entry.senses || []).some(s => s.enDefinition);
 }
 
 function hasSynonyms(entry) {
-  return (entry.senses || []).some(sense => (sense.synonyms || []).length);
+  return (entry.senses || []).some(s => (s.synonyms || []).length > 0);
 }
 
 function hasAntonyms(entry) {
-  return (entry.senses || []).some(sense => (sense.antonyms || []).length);
+  return (entry.senses || []).some(s => (s.antonyms || []).length > 0);
 }
 
 function hasIpa(entry) {
-  return (entry.pronunciations || []).some(pron => pron.ipa);
+  return (entry.pronunciations || []).some(p => p.ipa);
 }
 
 function hasArpabet(entry) {
-  return (entry.pronunciations || []).some(pron => pron.arpabet);
+  return (entry.pronunciations || []).some(p => p.arpabet);
 }
 
-function summarizeEntries(entries) {
+const KEY_TERMS = [
+  'study', 'education', 'computer', 'language', 'research', 'science',
+  'function', 'data', 'system', 'problem', 'method', 'result', 'definition',
+  'theorem', 'proof', 'variable', 'equation', 'graph', 'table', 'figure',
+  'culture', 'family', 'society', 'history',
+];
+
+function summarizeEntries(entries, label) {
+  const map = new Map(entries.map(e => [e.lemma, e]));
   const summary = {
+    label,
     total: entries.length,
     withVietnameseMeanings: 0,
     withEnglishDefinitions: 0,
@@ -59,8 +69,9 @@ function summarizeEntries(entries) {
     withAntonyms: 0,
     withForms: 0,
     averageSensesPerEntry: 0,
+    keyTerms: { present: [], missing: [] },
+    sampleEntries: entries.slice(0, 10).map(e => e.lemma),
     suspiciousEmptyMeanings: [],
-    top20SampleEntries: [],
   };
 
   let senseCount = 0;
@@ -79,46 +90,100 @@ function summarizeEntries(entries) {
     }
   }
 
-  summary.averageSensesPerEntry = entries.length ? Number((senseCount / entries.length).toFixed(2)) : 0;
-  summary.top20SampleEntries = entries.slice(0, 20).map(entry => entry.lemma);
+  summary.averageSensesPerEntry = entries.length
+    ? Number((senseCount / entries.length).toFixed(2))
+    : 0;
+
+  for (const term of KEY_TERMS) {
+    const entry = map.get(term);
+    if (entry) {
+      const vi = (entry.senses || [])[0]?.viMeanings?.[0] || '';
+      summary.keyTerms.present.push({ term, vi: vi.slice(0, 60) });
+    } else {
+      summary.keyTerms.missing.push(term);
+    }
+  }
+
   return summary;
 }
 
 function readCore(corePath) {
-  if (!corePath || !fs.existsSync(corePath)) return [];
+  if (!corePath || !fs.existsSync(corePath)) return { entries: [], fileMeta: {} };
   const data = JSON.parse(fs.readFileSync(corePath, 'utf8'));
-  return Object.values(data.entries || {});
+  const entries = Object.values(data.entries || {});
+  const fileMeta = {
+    version: data.version,
+    languagePair: data.languagePair,
+    entryCount: data.entryCount,
+    limit: data.limit,
+    builderVersion: data.builderVersion,
+    generatedAt: data.generatedAt,
+  };
+  return { entries, fileMeta };
 }
 
-function readFullSample(fullPath, limit = 10000) {
-  if (!fullPath || !fs.existsSync(fullPath)) return [];
-  const lines = fs.readFileSync(fullPath, 'utf8').split(/\r?\n/);
-  const entries = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    entries.push(JSON.parse(line));
-    if (entries.length >= limit) break;
+// Streams a JSONL file line-by-line to avoid loading 770 MB into memory.
+// Only samples up to `sampleLimit` entries for stats.
+function readFullStream(fullPath, sampleLimit = 10000) {
+  if (!fullPath || !fs.existsSync(fullPath)) {
+    return Promise.resolve({ entries: [], totalLines: 0, malformed: 0, sampled: 0 });
   }
-  return entries;
+
+  return new Promise((resolve, reject) => {
+    const state = { entries: [], totalLines: 0, malformed: 0 };
+    const rl = readline.createInterface({
+      input: fs.createReadStream(fullPath, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+
+    rl.on('line', (line) => {
+      if (!line.trim()) return;
+      state.totalLines++;
+      if (state.entries.length < sampleLimit) {
+        try {
+          state.entries.push(JSON.parse(line));
+        } catch {
+          state.malformed++;
+        }
+      }
+    });
+
+    rl.on('close', () => resolve({ ...state, sampled: state.entries.length }));
+    rl.on('error', reject);
+  });
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const corePath = args.core ? path.resolve(args.core) : null;
   const fullPath = args.full ? path.resolve(args.full) : null;
-  const coreEntries = readCore(corePath);
-  const fullEntries = readFullSample(fullPath);
+
+  const { entries: coreEntries, fileMeta: coreMeta } = readCore(corePath);
+  const fullData = await readFullStream(fullPath);
 
   const report = {
     files: {
-      core: { path: corePath, size: formatBytes(fileSize(corePath)) },
-      full: { path: fullPath, size: formatBytes(fileSize(fullPath)), sampledEntries: fullEntries.length },
+      core: {
+        path: corePath,
+        size: formatBytes(fileSize(corePath)),
+        meta: corePath ? coreMeta : null,
+      },
+      full: {
+        path: fullPath,
+        size: formatBytes(fileSize(fullPath)),
+        totalLinesScanned: fullData.totalLines,
+        sampledEntries: fullData.sampled,
+        malformedLines: fullData.malformed,
+      },
     },
-    core: summarizeEntries(coreEntries),
-    fullSample: summarizeEntries(fullEntries),
+    core: coreEntries.length ? summarizeEntries(coreEntries, 'core') : null,
+    fullSample: fullData.entries.length ? summarizeEntries(fullData.entries, `full-sample-${fullData.sampled}`) : null,
   };
 
   console.log(JSON.stringify(report, null, 2));
 }
 
-main();
+main().catch(err => {
+  console.error(err.stack || err.message || err);
+  process.exitCode = 1;
+});

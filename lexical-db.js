@@ -7,6 +7,7 @@ window.LexicalDB = (() => {
   const STORE_ENTRIES = 'entries';
   const STORE_FORMS = 'formIndex';
   const STORE_META = 'metadata';
+  const META_FULL_DICT = 'fullDictMeta';
 
   let initPromise = null;
   let ready = false;
@@ -23,7 +24,7 @@ window.LexicalDB = (() => {
   }
 
   function isSingleWord(text) {
-    return /^[\p{L}\p{N}_]+(?:['\u2019\u2018\-\u2010\u2011][\p{L}\p{N}_]+)*$/u.test(text);
+    return /^[\p{L}\p{N}_]+(?:[‘’‘\-‐‑][\p{L}\p{N}_]+)*$/u.test(text);
   }
 
   function supportsLanguages(sourceLang, targetLang) {
@@ -244,9 +245,60 @@ window.LexicalDB = (() => {
     });
   }
 
+  async function saveImportMeta(meta) {
+    try {
+      const db = await openDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_META, 'readwrite');
+        tx.objectStore(STORE_META).put({ key: META_FULL_DICT, ...meta });
+        tx.oncomplete = resolve;
+        tx.onerror = (e) => reject(e.target.error);
+      });
+    } catch { /* non-fatal */ }
+  }
+
+  async function getFullDictionaryStats() {
+    try {
+      const meta = await idbGet(STORE_META, META_FULL_DICT);
+      if (!meta) {
+        return { imported: false, importedCount: 0, importedAt: null, sourceFileName: null, sourceFileSize: null };
+      }
+      return {
+        imported: true,
+        importedCount: meta.importedCount || 0,
+        importedAt: meta.importedAt || null,
+        sourceFileName: meta.sourceFileName || null,
+        sourceFileSize: meta.sourceFileSize || null,
+      };
+    } catch {
+      return { imported: false, importedCount: 0, importedAt: null, sourceFileName: null, sourceFileSize: null };
+    }
+  }
+
+  async function clearFullDictionary() {
+    try {
+      const db = await openDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_ENTRIES, STORE_FORMS, STORE_META], 'readwrite');
+        tx.objectStore(STORE_ENTRIES).clear();
+        tx.objectStore(STORE_FORMS).clear();
+        const metaStore = tx.objectStore(STORE_META);
+        metaStore.delete(META_FULL_DICT);
+        metaStore.delete('updatedAt');
+        tx.oncomplete = resolve;
+        tx.onerror = (e) => reject(e.target.error);
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
+
   async function importJsonlText(text, options = {}) {
+    const t0 = Date.now();
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     const batchSize = Math.max(1, options.batchSize || 500);
-    const stats = { imported: 0, skipped: 0, errors: 0 };
+    const stats = { imported: 0, skipped: 0, errors: 0, elapsedMs: 0 };
     let batch = [];
 
     async function flush() {
@@ -255,7 +307,9 @@ window.LexicalDB = (() => {
       stats.imported += result.imported;
       stats.skipped += result.skipped;
       stats.errors += result.errors;
+      stats.elapsedMs = Date.now() - t0;
       batch = [];
+      if (onProgress) onProgress({ ...stats });
       await idleTick();
     }
 
@@ -271,19 +325,16 @@ window.LexicalDB = (() => {
       if (batch.length >= batchSize) await flush();
     }
     await flush();
+    stats.elapsedMs = Date.now() - t0;
     return stats;
   }
 
   async function importJsonlFile(file, options = {}) {
-    if (!file) return { imported: 0, skipped: 0, errors: 1 };
-    if (!file.stream || !window.TextDecoderStream) {
-      return importJsonlText(await file.text(), options);
-    }
-
+    if (!file) return { imported: 0, skipped: 0, errors: 1, elapsedMs: 0 };
+    const t0 = Date.now();
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     const batchSize = Math.max(1, options.batchSize || 500);
-    const stats = { imported: 0, skipped: 0, errors: 0 };
-    const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
-    let buffer = '';
+    const stats = { imported: 0, skipped: 0, errors: 0, elapsedMs: 0 };
     let batch = [];
 
     async function flush() {
@@ -292,34 +343,52 @@ window.LexicalDB = (() => {
       stats.imported += result.imported;
       stats.skipped += result.skipped;
       stats.errors += result.errors;
+      stats.elapsedMs = Date.now() - t0;
       batch = [];
+      if (onProgress) onProgress({ ...stats });
       await idleTick();
     }
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += value;
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
+    if (!file.stream || !window.TextDecoderStream) {
+      // Fallback: load into memory when streaming is unavailable
+      const text = await file.text();
+      const lines = text.split(/\r?\n/);
       for (const line of lines) {
         if (!line.trim()) continue;
-        try {
-          batch.push(JSON.parse(line));
-        } catch {
-          stats.errors++;
-        }
+        try { batch.push(JSON.parse(line)); } catch { stats.errors++; }
         if (batch.length >= batchSize) await flush();
       }
-    }
-    if (buffer.trim()) {
-      try {
-        batch.push(JSON.parse(buffer));
-      } catch {
-        stats.errors++;
+    } else {
+      // Stream line-by-line — avoids loading the full file into memory
+      const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try { batch.push(JSON.parse(line)); } catch { stats.errors++; }
+          if (batch.length >= batchSize) await flush();
+        }
+      }
+      if (buffer.trim()) {
+        try { batch.push(JSON.parse(buffer)); } catch { stats.errors++; }
       }
     }
+
     await flush();
+    stats.elapsedMs = Date.now() - t0;
+
+    await saveImportMeta({
+      importedAt: Date.now(),
+      importedCount: stats.imported,
+      sourceFileName: file.name || '',
+      sourceFileSize: file.size || 0,
+    });
+
     return stats;
   }
 
@@ -348,5 +417,7 @@ window.LexicalDB = (() => {
     importEntries,
     importJsonlText,
     importJsonlFile,
+    getFullDictionaryStats,
+    clearFullDictionary,
   };
 })();

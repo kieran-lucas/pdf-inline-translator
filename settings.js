@@ -21,6 +21,11 @@
   const clearCacheBtn = document.getElementById('settings-clear-cache');
   const statusEl      = document.getElementById('settings-status');
 
+  const fullDictFileInput  = document.getElementById('settings-full-dict-file');
+  const fullDictImportBtn  = document.getElementById('settings-full-dict-import');
+  const fullDictClearBtn   = document.getElementById('settings-full-dict-clear');
+  const fullDictStatusEl   = document.getElementById('settings-full-dict-status');
+
   let statusTimer = null;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -42,6 +47,25 @@
       : 'Translation settings — no API key';
   }
 
+  function setFullDictStatus(msg) {
+    if (fullDictStatusEl) fullDictStatusEl.textContent = msg;
+  }
+
+  async function refreshFullDictStatus() {
+    if (!window.LexicalDB || !window.LexicalDB.getFullDictionaryStats) return;
+    try {
+      const stats = await window.LexicalDB.getFullDictionaryStats();
+      if (stats.imported) {
+        const count = stats.importedCount.toLocaleString();
+        setFullDictStatus(`Full dictionary: ${count} entries imported`);
+      } else {
+        setFullDictStatus('Full dictionary: not imported');
+      }
+    } catch {
+      setFullDictStatus('Full dictionary: status unknown');
+    }
+  }
+
   async function populateForm() {
     const s = await window.Translator.loadSettings();
     apiKeyInput.value = s.apiKey || '';
@@ -60,7 +84,10 @@
   toggle.addEventListener('click', () => {
     const isOpen = panel.classList.toggle('settings-open');
     toggle.setAttribute('aria-expanded', String(isOpen));
-    if (isOpen) populateForm();
+    if (isOpen) {
+      populateForm();
+      refreshFullDictStatus();
+    }
   });
 
   // ── Save ───────────────────────────────────────────────────────────────────
@@ -108,6 +135,74 @@
     await window.Translator.clearCache();
     showStatus('Translation cache cleared.', false);
   });
+
+  // ── Full dictionary import ─────────────────────────────────────────────────
+
+  if (fullDictImportBtn) {
+    fullDictImportBtn.addEventListener('click', async () => {
+      const file = fullDictFileInput?.files?.[0];
+      if (!file) {
+        setFullDictStatus('Select a .jsonl file first.');
+        return;
+      }
+      if (file.size > 100 * 1024 * 1024) {
+        const sizeMB = (file.size / 1024 / 1024).toFixed(0);
+        const ok = confirm(
+          `This file is ${sizeMB} MB. Import may take several minutes and will not block the reader. Continue?`
+        );
+        if (!ok) return;
+      }
+
+      fullDictImportBtn.disabled = true;
+      if (fullDictClearBtn) fullDictClearBtn.disabled = true;
+      setFullDictStatus('Starting import…');
+
+      try {
+        const stats = await window.LexicalDB.importJsonlFile(file, {
+          onProgress(s) {
+            const elapsed = (s.elapsedMs / 1000).toFixed(1);
+            setFullDictStatus(
+              `Importing… ${s.imported.toLocaleString()} entries (${elapsed}s elapsed)`
+            );
+          },
+        });
+        const elapsed = (stats.elapsedMs / 1000).toFixed(1);
+        setFullDictStatus(
+          `Done: ${stats.imported.toLocaleString()} imported, ` +
+          `${stats.skipped} skipped, ${stats.errors} errors — ${elapsed}s`
+        );
+        await refreshFullDictStatus();
+      } catch (err) {
+        setFullDictStatus(`Import failed: ${err?.message || String(err)}`);
+      } finally {
+        fullDictImportBtn.disabled = false;
+        if (fullDictClearBtn) fullDictClearBtn.disabled = false;
+      }
+    });
+  }
+
+  // ── Full dictionary clear ──────────────────────────────────────────────────
+
+  if (fullDictClearBtn) {
+    fullDictClearBtn.addEventListener('click', async () => {
+      const ok = confirm('Clear the full IndexedDB dictionary? The core dictionary will remain.');
+      if (!ok) return;
+      fullDictClearBtn.disabled = true;
+      setFullDictStatus('Clearing…');
+      try {
+        const result = await window.LexicalDB.clearFullDictionary();
+        if (result.ok) {
+          setFullDictStatus('Full dictionary cleared.');
+        } else {
+          setFullDictStatus(`Clear failed: ${result.error}`);
+        }
+      } catch (err) {
+        setFullDictStatus(`Clear failed: ${err?.message || String(err)}`);
+      } finally {
+        fullDictClearBtn.disabled = false;
+      }
+    });
+  }
 
   // ── Initialize indicator on load (panel stays closed) ─────────────────────
 
