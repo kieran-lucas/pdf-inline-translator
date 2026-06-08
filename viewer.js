@@ -14,6 +14,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.m
 
 // Set DEBUG_RENDER = true to outline pageDiv / canvas / textLayer for alignment checking.
 const DEBUG_RENDER = false;
+const DEBUG_TEXT_GEOMETRY = false;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -89,6 +90,12 @@ function createSlot(pageNum, naturalW, naturalH) {
     pageDiv,
     canvas:           null,
     textLayerDiv,
+    textContentItems: [],
+    wordBoxes:        [],
+    textGeometryGeneration: -1,
+    textGeometryZoom: null,
+    geometryHighlight: null,
+    geometryDebugLayer: null,
     naturalW,
     naturalH,
     state:            'idle',
@@ -256,6 +263,373 @@ function isCancelError(err) {
 //   every span renders at the wrong width — causing visible misalignment with
 //   the canvas.  Setting --scale-factor = viewport.scale fixes all of this.
 
+// -- PDF text geometry -------------------------------------------------------
+// Derived from PDF.js textContent + viewport transforms, not from textLayer DOM.
+
+let measureCanvas = null;
+
+function getMeasureContext() {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas');
+  return measureCanvas.getContext('2d');
+}
+
+function isBaseWordChar(ch) {
+  try {
+    return /[\p{L}\p{N}_]/u.test(ch);
+  } catch (_) {
+    return /[A-Za-z0-9_]/.test(ch);
+  }
+}
+
+function collectWords(str) {
+  const words = [];
+  let start = -1;
+
+  function isInternalJoiner(idx) {
+    const ch = str[idx];
+    return (ch === "'" || ch === '\u2019' || ch === '\u2018' ||
+            ch === '-' || ch === '\u2010' || ch === '\u2011') &&
+           idx > 0 && idx < str.length - 1 &&
+           isBaseWordChar(str[idx - 1]) &&
+           isBaseWordChar(str[idx + 1]);
+  }
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (isBaseWordChar(ch) || (start >= 0 && isInternalJoiner(i))) {
+      if (start < 0) start = i;
+      continue;
+    }
+    if (start >= 0) {
+      words.push({ text: str.slice(start, i), start, end: i });
+      start = -1;
+    }
+  }
+
+  if (start >= 0) words.push({ text: str.slice(start), start, end: str.length });
+  return words;
+}
+
+function measurePrefixRatios(str, start, end, fontSize) {
+  const ctx = getMeasureContext();
+  if (!ctx) {
+    const len = Math.max(1, str.length);
+    return { startRatio: start / len, endRatio: end / len };
+  }
+
+  ctx.font = `${Math.max(1, fontSize)}px sans-serif`;
+  const total = ctx.measureText(str).width || str.length || 1;
+  const prefix = ctx.measureText(str.slice(0, start)).width;
+  const through = ctx.measureText(str.slice(0, end)).width;
+  return {
+    startRatio: Math.max(0, Math.min(1, prefix / total)),
+    endRatio: Math.max(0, Math.min(1, through / total)),
+  };
+}
+
+function makeItemBox(item, viewport, itemIndex, pageNum) {
+  const transform = pdfjsLib.Util?.transform
+    ? pdfjsLib.Util.transform(viewport.transform, item.transform)
+    : [
+        viewport.transform[0] * item.transform[0] + viewport.transform[2] * item.transform[1],
+        viewport.transform[1] * item.transform[0] + viewport.transform[3] * item.transform[1],
+        viewport.transform[0] * item.transform[2] + viewport.transform[2] * item.transform[3],
+        viewport.transform[1] * item.transform[2] + viewport.transform[3] * item.transform[3],
+        viewport.transform[0] * item.transform[4] + viewport.transform[2] * item.transform[5] + viewport.transform[4],
+        viewport.transform[1] * item.transform[4] + viewport.transform[3] * item.transform[5] + viewport.transform[5],
+      ];
+
+  const str = item.str || '';
+  const fontHeight = Math.max(1, Math.hypot(transform[2], transform[3]) || Math.abs(item.height * viewport.scale) || 1);
+  const width = Math.max(1, Math.abs(item.width * viewport.scale) || Math.hypot(transform[0], transform[1]) * Math.max(1, str.length));
+  const baseline = transform[5];
+  const advanceLen = Math.hypot(transform[0], transform[1]) || 1;
+  const advanceX = (transform[0] / advanceLen) * width;
+  const advanceY = (transform[1] / advanceLen) * width;
+  let heightX = transform[2];
+  let heightY = transform[3];
+  if (Math.hypot(heightX, heightY) < 0.001) {
+    heightX = 0;
+    heightY = -fontHeight;
+  }
+  const corners = [
+    { x: transform[4], y: transform[5] },
+    { x: transform[4] + advanceX, y: transform[5] + advanceY },
+    { x: transform[4] + heightX, y: transform[5] + heightY },
+    { x: transform[4] + advanceX + heightX, y: transform[5] + advanceY + heightY },
+  ];
+  const xs = corners.map(p => p.x);
+  const ys = corners.map(p => p.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+
+  return {
+    pageNum,
+    itemIndex,
+    str,
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+    baseline,
+  };
+}
+
+function buildTextGeometryIndex(textContent, viewport, pageNum) {
+  const wordBoxes = [];
+  const items = textContent.items || [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const str = item.str || '';
+    if (!str.trim()) continue;
+
+    const itemBox = makeItemBox(item, viewport, i, pageNum);
+    if (!Number.isFinite(itemBox.left) || !Number.isFinite(itemBox.top) ||
+        itemBox.width <= 0 || itemBox.height <= 0) continue;
+
+    for (const word of collectWords(str)) {
+      const ratios = measurePrefixRatios(str, word.start, word.end, itemBox.height);
+      const left = itemBox.left + itemBox.width * ratios.startRatio;
+      const right = itemBox.left + itemBox.width * ratios.endRatio;
+      const width = right - left;
+      if (width <= 0.5) continue;
+
+      wordBoxes.push({
+        text: word.text,
+        pageNum,
+        itemIndex: i,
+        itemText: str,
+        start: word.start,
+        end: word.end,
+        left,
+        top: itemBox.top,
+        right,
+        bottom: itemBox.bottom,
+        width,
+        height: itemBox.height,
+        baseline: itemBox.baseline,
+        centerX: left + width / 2,
+        centerY: itemBox.top + itemBox.height / 2,
+      });
+    }
+  }
+
+  return wordBoxes;
+}
+
+function getPageSlotFromPoint(clientX, clientY) {
+  const pageDiv = document.elementsFromPoint(clientX, clientY)
+    .find(el => el.classList?.contains('pdf-page'));
+  if (!pageDiv) return null;
+  const pageNum = parseInt(pageDiv.dataset.page, 10);
+  return Number.isFinite(pageNum) ? slots[pageNum] || null : null;
+}
+
+function getPageLocalPoint(slot, clientX, clientY) {
+  const rect = slot?.pageDiv.getBoundingClientRect();
+  if (!rect) return null;
+  return { x: clientX - rect.left, y: clientY - rect.top, pageRect: rect };
+}
+
+function rectFromWordBox(pageRect, wordBox) {
+  const left = pageRect.left + wordBox.left;
+  const top = pageRect.top + wordBox.top;
+  const right = pageRect.left + wordBox.right;
+  const bottom = pageRect.top + wordBox.bottom;
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: wordBox.width,
+    height: wordBox.height,
+  };
+}
+
+function findWordAtPoint(clientX, clientY) {
+  const slot = getPageSlotFromPoint(clientX, clientY);
+  if (!hasUsableTextGeometry(slot)) return null;
+
+  const local = getPageLocalPoint(slot, clientX, clientY);
+  if (!local) return null;
+
+  const { x, y, pageRect } = local;
+  const yCandidates = [];
+  for (const box of slot.wordBoxes) {
+    const yTol = Math.max(2, Math.min(6, box.height * 0.35));
+    if (y >= box.top - yTol && y <= box.bottom + yTol) yCandidates.push(box);
+  }
+
+  if (!yCandidates.length) return null;
+
+  let best = null;
+  let bestScore = Infinity;
+  for (const box of yCandidates) {
+    if (x < box.left || x > box.right) continue;
+    const linePenalty = Math.abs(y - box.centerY);
+    const score = linePenalty + Math.abs(x - box.centerX) * 0.01;
+    if (score < bestScore) {
+      best = box;
+      bestScore = score;
+    }
+  }
+
+  if (!best) {
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const box of yCandidates) {
+      const lineDist = Math.abs(y - box.centerY);
+      const lineTol = Math.max(3, box.height * 0.5);
+      if (lineDist > lineTol) continue;
+      const dist = x < box.left ? box.left - x : x - box.right;
+      if (dist < nearestDist) {
+        nearest = box;
+        nearestDist = dist;
+      }
+    }
+
+    const maxSnap = nearest ? Math.max(3, Math.min(8, nearest.height * 0.45)) : 0;
+    if (nearest && nearestDist <= maxSnap) best = nearest;
+  }
+
+  if (!best) return null;
+
+  const rect = rectFromWordBox(pageRect, best);
+  if (DEBUG_TEXT_GEOMETRY) {
+    console.debug('[text-geometry] hit', {
+      pageNum: best.pageNum,
+      localX: Math.round(x),
+      localY: Math.round(y),
+      text: best.text,
+    });
+  }
+
+  return {
+    text: best.text,
+    rect,
+    pageNum: best.pageNum,
+    source: 'pdf-geometry',
+    slot,
+    wordBox: best,
+  };
+}
+
+function hasUsableTextGeometry(slot) {
+  return !!slot &&
+    slot.state === 'rendered' &&
+    !!slot.wordBoxes?.length &&
+    slot.textGeometryGeneration === currentGeneration &&
+    slot.textGeometryZoom === currentZoom;
+}
+
+function hasUsableTextGeometryAtPoint(clientX, clientY) {
+  return hasUsableTextGeometry(getPageSlotFromPoint(clientX, clientY));
+}
+
+function ensureHighlight(slot) {
+  if (slot.geometryHighlight?.isConnected) return slot.geometryHighlight;
+  const div = document.createElement('div');
+  div.className = 'geometry-word-highlight';
+  slot.geometryHighlight = div;
+  slot.pageDiv.appendChild(div);
+  return div;
+}
+
+function clearCustomSelection() {
+  for (let i = 1; i < slots.length; i++) {
+    const slot = slots[i];
+    if (slot?.geometryHighlight) {
+      slot.geometryHighlight.remove();
+      slot.geometryHighlight = null;
+    }
+  }
+}
+
+function showCustomSelection(slot, wordBox) {
+  clearCustomSelection();
+  if (!slot || !wordBox) return;
+  const div = ensureHighlight(slot);
+  div.style.left = wordBox.left + 'px';
+  div.style.top = wordBox.top + 'px';
+  div.style.width = wordBox.width + 'px';
+  div.style.height = wordBox.height + 'px';
+}
+
+function drawGeometryDebug(slot) {
+  if (!DEBUG_TEXT_GEOMETRY) return;
+  if (slot.geometryDebugLayer) slot.geometryDebugLayer.remove();
+  const layer = document.createElement('div');
+  layer.className = 'geometry-debug-layer';
+  for (const box of slot.wordBoxes || []) {
+    const div = document.createElement('div');
+    div.className = 'geometry-debug-box';
+    div.style.left = box.left + 'px';
+    div.style.top = box.top + 'px';
+    div.style.width = box.width + 'px';
+    div.style.height = box.height + 'px';
+    layer.appendChild(div);
+  }
+  slot.geometryDebugLayer = layer;
+  slot.pageDiv.appendChild(layer);
+}
+
+function getVisibleWordTexts(extraPages = 1) {
+  const pageNums = new Set();
+  for (let i = 1; i < slots.length; i++) {
+    const slot = slots[i];
+    if (!slot?.pageDiv) continue;
+    const rect = slot.pageDiv.getBoundingClientRect();
+    if (rect.bottom >= 0 && rect.top <= window.innerHeight) {
+      for (let p = i - extraPages; p <= i + extraPages; p++) {
+        if (p > 0 && p < slots.length) pageNums.add(p);
+      }
+    }
+  }
+
+  const words = [];
+  const seen = new Set();
+  for (const pageNum of pageNums) {
+    const slot = slots[pageNum];
+    if (!slot?.wordBoxes?.length ||
+        slot.textGeometryGeneration !== currentGeneration ||
+        slot.textGeometryZoom !== currentZoom) continue;
+    for (const box of slot.wordBoxes) {
+      const word = (box.text || '').toLowerCase();
+      if (seen.has(word)) continue;
+      seen.add(word);
+      words.push(word);
+      if (words.length >= 120) return words;
+    }
+  }
+  return words;
+}
+
+let prefetchScheduleTimer = null;
+
+function scheduleVisibleWordPrefetch(delay = 600) {
+  if (prefetchScheduleTimer) clearTimeout(prefetchScheduleTimer);
+  prefetchScheduleTimer = setTimeout(() => {
+    prefetchScheduleTimer = null;
+    const words = getVisibleWordTexts(1);
+    if (words.length) window.Translator?.queuePrefetchWords?.(words);
+  }, delay);
+}
+
+window.PdfViewerState = {
+  getPageSlotFromPoint,
+  getPageLocalPoint,
+  findWordAtPoint,
+  hasUsableTextGeometryAtPoint,
+  getVisibleWordTexts,
+  clearCustomSelection,
+  showCustomSelection,
+};
+
 async function renderPageIntoSlot(page, slot, zoom, generation) {
   const outputScale = window.devicePixelRatio || 1;
   const viewport    = page.getViewport({ scale: zoom });
@@ -314,6 +688,18 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
   // ── Text layer ────────────────────────────────────────────────────────────
   // Clear stale content from a previous render (different zoom / generation).
   slot.textLayerDiv.innerHTML = '';
+  slot.textContentItems = [];
+  slot.wordBoxes = [];
+  slot.textGeometryGeneration = -1;
+  slot.textGeometryZoom = null;
+  if (slot.geometryHighlight) {
+    slot.geometryHighlight.remove();
+    slot.geometryHighlight = null;
+  }
+  if (slot.geometryDebugLayer) {
+    slot.geometryDebugLayer.remove();
+    slot.geometryDebugLayer = null;
+  }
 
   // CRITICAL: PDF.js 3.11.x evaluates span positions and font-sizes as
   // calc(var(--scale-factor) * Npx).  The constructor of TextLayerRenderTask
@@ -331,6 +717,13 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
       // task to append stale spans into the div alongside the new render's spans.
       const textContent = await page.getTextContent();
       if (generation !== currentGeneration) return;
+
+      slot.textContentItems = textContent.items || [];
+      slot.wordBoxes = buildTextGeometryIndex(textContent, viewport, slot.pageNum);
+      slot.textGeometryGeneration = generation;
+      slot.textGeometryZoom = zoom;
+      drawGeometryDebug(slot);
+      scheduleVisibleWordPrefetch();
 
       const textTask = pdfjsLib.renderTextLayer({
         textContentSource: textContent,   // direct TextContent object → sync path
@@ -364,6 +757,7 @@ function scheduleVisiblePages() {
       scheduleRender(i);
     }
   }
+  scheduleVisibleWordPrefetch(900);
 }
 
 // ── PDF load orchestrator ──────────────────────────────────────────────────
@@ -398,6 +792,7 @@ async function loadPDF(source) {
 
 function clearViewer() {
   teardownObserver();
+  clearCustomSelection();
 
   // Cancel every in-flight render before destroying the document.
   for (let i = 1; i < slots.length; i++) {
@@ -530,6 +925,18 @@ zoomSelect.addEventListener('change', () => {
     slot.state           = 'idle';
     slot.activeGeneration = -1;
     slot.renderedZoom    = null;
+    slot.textContentItems = [];
+    slot.wordBoxes = [];
+    slot.textGeometryGeneration = -1;
+    slot.textGeometryZoom = null;
+    if (slot.geometryHighlight) {
+      slot.geometryHighlight.remove();
+      slot.geometryHighlight = null;
+    }
+    if (slot.geometryDebugLayer) {
+      slot.geometryDebugLayer.remove();
+      slot.geometryDebugLayer = null;
+    }
 
     // Instant resize from cached natural dimensions — no async work needed.
     // Round to integer CSS pixels to stay consistent with renderPageIntoSlot.
@@ -554,3 +961,6 @@ zoomSelect.addEventListener('change', () => {
   // Kick off renders for everything currently on or near the screen.
   scheduleVisiblePages();
 });
+
+window.addEventListener('scroll', () => scheduleVisibleWordPrefetch(1000), { passive: true });
+window.addEventListener('resize', () => scheduleVisibleWordPrefetch(1000));

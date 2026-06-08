@@ -57,6 +57,7 @@
   function hideAll() {
     hideTxBtn();
     hidePopup();
+    window.PdfViewerState?.clearCustomSelection?.();
     pending = null;
     openRect = null;
   }
@@ -157,6 +158,17 @@
     actions.appendChild(copyBtn);
     actions.appendChild(makeFallbackBtn(sourceText, settings));
     txBody.appendChild(actions);
+  }
+
+  function setBodyStreaming(translated) {
+    let p = txBody.querySelector('.tx-result-text');
+    if (!p) {
+      txBody.innerHTML = '';
+      p = document.createElement('p');
+      p.className = 'tx-result-text tx-result-streaming';
+      txBody.appendChild(p);
+    }
+    p.textContent = translated;
   }
 
   function setBodyError(errorType, errorMsg, sourceText, settings) {
@@ -293,7 +305,16 @@
     hidePopup();
     place(txPopup, rect);
 
-    const result = await window.Translator.translate(text);
+    const result = await window.Translator.translate(text, {
+      onChunk: (partial) => {
+        if (myGen !== popupGeneration) return;
+        if (txPopup.classList.contains('tx-hidden')) return;
+        setBodyStreaming(partial);
+        if (openRect && !txPopup.classList.contains('tx-hidden')) {
+          rePlace(txPopup, openRect);
+        }
+      },
+    });
 
     // Discard stale result: a newer selection opened while we were waiting.
     if (myGen !== popupGeneration) return;
@@ -524,9 +545,6 @@
   // dblclick fires, so setTimeout(0) reads the finalised state.
 
   document.addEventListener('dblclick', (e) => {
-    const span = e.target.closest('.textLayer span');
-    if (!span) return;
-
     // Cancel any translate button that mouseup may have shown for the partial
     // selection produced by the second mouseup before dblclick fired.
     hideTxBtn();
@@ -534,6 +552,24 @@
 
     const clientX = e.clientX;
     const clientY = e.clientY;
+    const hasGeometry = window.PdfViewerState?.hasUsableTextGeometryAtPoint?.(clientX, clientY);
+    const geometryHit = window.PdfViewerState?.findWordAtPoint?.(clientX, clientY);
+    if (geometryHit?.text && geometryHit.rect) {
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      window.PdfViewerState?.showCustomSelection?.(geometryHit.slot, geometryHit.wordBox);
+      openPopup(geometryHit.text, geometryHit.rect);
+      return;
+    }
+    if (hasGeometry) {
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      window.PdfViewerState?.clearCustomSelection?.();
+      return;
+    }
+
+    const span = e.target.closest('.textLayer span');
+    if (!span) return;
 
     setTimeout(() => {
       // Strategy A — accept the native browser selection when it is clean

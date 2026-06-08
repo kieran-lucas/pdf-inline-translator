@@ -74,9 +74,20 @@
           type="text"
           id="settings-model"
           class="settings-input settings-model-input"
-          placeholder="gemini-2.5-flash"
+          placeholder="gemini-2.5-flash-lite"
           spellcheck="false"
         >
+      </div>
+
+      <div class="settings-row settings-row-toggles">
+        <label class="settings-check">
+          <input type="checkbox" id="settings-prefetch">
+          <span>Enable background prefetch</span>
+        </label>
+        <label class="settings-check">
+          <input type="checkbox" id="settings-streaming">
+          <span>Enable streaming responses</span>
+        </label>
       </div>
 
       <div class="settings-row settings-row-inline">

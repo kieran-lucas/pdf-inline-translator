@@ -268,6 +268,28 @@ body {
   color: transparent;
 }
 
+.geometry-word-highlight {
+  position: absolute;
+  background: rgba(37, 99, 235, 0.28);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.geometry-debug-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.geometry-debug-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(220, 38, 38, 0.75);
+  background: rgba(220, 38, 38, 0.06);
+}
+
 /* ── Translation UI ───────────────────────────────────────────────────────── */
 
 .tx-hidden {
@@ -489,6 +511,25 @@ body {
 .settings-row-inline {
   flex-direction: row;
   gap: 16px;
+}
+
+.settings-row-toggles {
+  gap: 6px;
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.settings-check input {
+  margin: 0;
+  accent-color: #3b82f6;
 }
 
 .settings-lang-group {

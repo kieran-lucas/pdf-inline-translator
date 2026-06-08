@@ -12,6 +12,8 @@
   const targetInput = document.getElementById('settings-target-lang');
   const sourceInput = document.getElementById('settings-source-lang');
   const modelInput  = document.getElementById('settings-model');
+  const prefetchInput  = document.getElementById('settings-prefetch');
+  const streamingInput = document.getElementById('settings-streaming');
   const saveBtn       = document.getElementById('settings-save');
   const clearBtn      = document.getElementById('settings-clear');
   const clearCacheBtn = document.getElementById('settings-clear-cache');
@@ -43,7 +45,9 @@
     apiKeyInput.value = s.apiKey || '';
     targetInput.value = s.targetLang;
     sourceInput.value = s.sourceLang === 'auto' ? '' : s.sourceLang;
-    modelInput.value  = s.model || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash';
+    modelInput.value  = s.model || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash-lite';
+    prefetchInput.checked = s.enablePrefetch !== false;
+    streamingInput.checked = s.enableStreaming !== false;
     setKeyIndicator(!!s.apiKey);
   }
 
@@ -61,8 +65,17 @@
     const apiKey     = apiKeyInput.value.trim();
     const targetLang = targetInput.value.trim() || 'vi';
     const sourceLang = sourceInput.value.trim() || 'auto';
-    const model      = modelInput.value.trim()  || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash';
-    await window.Translator.saveSettings({ apiKey, targetLang, sourceLang, model });
+    const model      = modelInput.value.trim()  || window.Translator.DEFAULT_MODEL || 'gemini-2.5-flash-lite';
+    const enablePrefetch = prefetchInput.checked;
+    const enableStreaming = streamingInput.checked;
+    await window.Translator.saveSettings({
+      apiKey,
+      targetLang,
+      sourceLang,
+      model,
+      enablePrefetch,
+      enableStreaming,
+    });
     setKeyIndicator(!!apiKey);
     showStatus('Settings saved.', false);
   });
