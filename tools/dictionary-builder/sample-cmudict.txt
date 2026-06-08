@@ -1,0 +1,6 @@
+;;; Tiny CMUdict-style sample for builder tests.
+STUDY  S T AH1 D IY0
+STUDY(1)  S T AH1 D IY0
+EDUCATION  EH2 JH AH0 K EY1 SH AH0 N
+COMPUTER  K AH0 M P Y UW1 T ER0
+OBSCURE  AH0 B S K Y UH1 R

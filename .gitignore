@@ -1,0 +1,8 @@
+*.dump
+*.raw
+*.bz2
+*.gz
+*.xz
+dictionaries/en-vi-full.generated.jsonl
+tools/dictionary-builder/sources/
+tools/dictionary-builder/tmp/

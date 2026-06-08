@@ -508,9 +508,6 @@ body {
 
 .tx-copy-btn:hover { color: #86efac; border-color: #166534; }
 
-.tx-fallback-btn { color: #7dd3fc; }
-.tx-fallback-btn:hover { color: #38bdf8; border-color: #0369a1; }
-
 .tx-open-settings-btn { color: #fbbf24; }
 .tx-open-settings-btn:hover { color: #fcd34d; border-color: #92400e; }
 

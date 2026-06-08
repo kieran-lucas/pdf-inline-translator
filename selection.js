@@ -104,28 +104,6 @@
 
   // ── Popup body helpers ─────────────────────────────────────────────────────
 
-  function googleTranslateUrl(text, settings) {
-    const sl = (settings.sourceLang && settings.sourceLang !== 'auto')
-      ? settings.sourceLang : 'auto';
-    const tl = settings.targetLang || 'vi';
-    return (
-      'https://translate.google.com/?sl=' + encodeURIComponent(sl) +
-      '&tl='   + encodeURIComponent(tl) +
-      '&text=' + encodeURIComponent(text.slice(0, 5000)) +
-      '&op=translate'
-    );
-  }
-
-  function makeFallbackBtn(sourceText, settings) {
-    const btn = document.createElement('button');
-    btn.className   = 'tx-action-btn tx-fallback-btn';
-    btn.textContent = 'Open in Google Translate ↗';
-    btn.addEventListener('click', () => {
-      window.open(googleTranslateUrl(sourceText, settings), '_blank');
-    });
-    return btn;
-  }
-
   function setBodyLoading() {
     txBody.innerHTML =
       '<div class="tx-loading">' +
@@ -189,7 +167,6 @@
   function setBodyResult(result, sourceText) {
     txBody.innerHTML = '';
     const translated = result.translated;
-    const settings = result.settings;
 
     if (result.entry) {
       const entry = result.entry;
@@ -262,7 +239,6 @@
     });
 
     actions.appendChild(copyBtn);
-    actions.appendChild(makeFallbackBtn(sourceText, settings));
     txBody.appendChild(actions);
   }
 
@@ -277,7 +253,7 @@
     p.textContent = translated;
   }
 
-  function setBodyError(errorType, errorMsg, sourceText, settings) {
+  function setBodyError(errorType, errorMsg) {
     txBody.innerHTML = '';
 
     if (errorType === 'no-key') {
@@ -305,7 +281,6 @@
       txBody.appendChild(msg);
     }
 
-    txBody.appendChild(makeFallbackBtn(sourceText, settings));
   }
 
   // ── Selection helper ───────────────────────────────────────────────────────
@@ -397,9 +372,7 @@
         `Selection is too long (${normalized.length} / ` +
         `${window.Translator.MAX_CHARS} chars). Shorten your selection to translate inline.`;
       txBody.appendChild(msg);
-      const settings = await window.Translator.loadSettings();
-      if (myGen !== popupGeneration) return; // superseded while awaiting settings
-      txBody.appendChild(makeFallbackBtn(text, settings));
+      if (myGen !== popupGeneration) return;
       hidePopup();
       place(txPopup, rect);
       return;
@@ -432,7 +405,7 @@
     if (result.ok) {
       setBodyResult(result, text);
     } else {
-      setBodyError(result.errorType, result.errorMsg, text, result.settings);
+      setBodyError(result.errorType, result.errorMsg);
     }
 
     // Re-position now that the popup height has changed with the new content.

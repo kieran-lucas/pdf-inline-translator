@@ -1,0 +1,6 @@
+en-vi-full.generated.jsonl
+*.dump
+*.raw
+*.bz2
+*.gz
+*.xz

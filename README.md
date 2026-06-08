@@ -15,8 +15,8 @@ No accounts, no servers, no tracking. Everything runs locally except the Gemini 
 - Select any text → click **Translate** → inline popup with translation
 - Double-click any word → popup opens immediately with translation
 - Two-tier translation cache (memory + IndexedDB) — repeated lookups are instant
-- Gemini API for real translation (requires your own API key from Google AI Studio)
-- "Open in Google Translate" fallback button in every popup
+- Offline English-to-Vietnamese lexical dictionary lookup before Gemini
+- Gemini API fallback for sentence translation and dictionary misses when enabled
 
 ---
 
@@ -53,7 +53,7 @@ To reload after code changes: click the reload icon (↺) on the extension card 
 ### Popup actions
 
 - **Copy** — copies the translated text to the clipboard
-- **Open in Google Translate ↗** — opens the selected text in Google Translate in a new tab (fallback, works even without an API key)
+- **More** — expands rich offline dictionary entries when extra senses or examples are available
 - **×** — closes the popup (or press **Escape**)
 
 ---
@@ -89,11 +89,12 @@ To remove the key: open Settings → **Clear Key**.
 ## Notes
 
 - **API key is stored locally** — stored only in `chrome.storage.local` on your device. It is sent only to `generativelanguage.googleapis.com` in the `x-goog-api-key` request header. It is never logged, never stored in the translation cache, never put in a URL query string.
-- **No unofficial Google Translate endpoint** — the extension uses only the official Gemini API (`generativelanguage.googleapis.com`). The "Open in Google Translate" button opens the official `translate.google.com` website in a new tab; it is never called automatically.
+- **No external translation fallback UI** — dictionary lookup is offline-first, and optional translation fallback uses only the configured Gemini API (`generativelanguage.googleapis.com`).
+- **Dictionary builder** — `tools/dictionary-builder` can generate reviewed offline dictionary files from Kaikki/Wiktionary, Open English WordNet, and CMUdict. Source downloads are explicit developer commands and raw dumps are ignored.
 - **Scanned / image PDFs** — PDFs that are scanned images rather than embedded text will not have a selectable text layer. You need a PDF with embedded text (or one that has been OCR'd) for translation to work.
 - **PDFs behind login or paywalls** — URL loading will fail for PDFs that require authentication. Download the file first and open it with **Open File** instead.
 - **Translation cache** — successful translations are cached in memory (up to 200 entries) and in IndexedDB (up to 1 000 entries). Cached results appear instantly on repeat lookups. Cache key includes: normalized text, source language, target language, and Gemini model. To clear: open Settings → **Clear Cache**.
-- **Selection length limit** — inline translation is capped at 2 000 characters. Longer selections show a message and offer the Google Translate fallback instead.
+- **Selection length limit** — inline translation is capped at 2 000 characters. Longer selections show a message and do not call Gemini.
 - **Model names** — if a model becomes unavailable (HTTP 404), try another model name in Settings (e.g. `gemini-1.5-flash`, `gemini-2.0-flash`).
 
 ---
@@ -141,11 +142,10 @@ Run through this after any code change or extension reload.
 
 ### API key scenarios
 
-- [ ] No key saved → popup shows "No Gemini API key configured" with ⚙ Open Settings + Google Translate fallback
-- [ ] Invalid key saved → popup shows "Invalid Gemini API key or unauthorized project" with fallback
+- [ ] No key saved → popup shows "No Gemini API key configured" with ⚙ Open Settings
+- [ ] Invalid key saved → popup shows "Invalid Gemini API key or unauthorized project"
 - [ ] Valid key saved → popup shows correct translation in the target language
 - [ ] Copy button → paste elsewhere to verify the translated text
-- [ ] "Open in Google Translate ↗" → new tab opens at translate.google.com with text pre-filled
 
 ### Cache behaviour
 

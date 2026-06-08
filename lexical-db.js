@@ -204,13 +204,17 @@ window.LexicalDB = (() => {
   async function importEntries(entries) {
     const db = await openDb();
     const list = Array.isArray(entries) ? entries : Object.values(entries || {});
+    const stats = { imported: 0, skipped: 0, errors: 0 };
     await new Promise((resolve, reject) => {
       const tx = db.transaction([STORE_ENTRIES, STORE_FORMS, STORE_META], 'readwrite');
       const entryStore = tx.objectStore(STORE_ENTRIES);
       const formStore = tx.objectStore(STORE_FORMS);
       for (const entry of list) {
         const normalized = normalizeLookupKey(entry?.lemma);
-        if (!normalized) continue;
+        if (!normalized) {
+          stats.skipped++;
+          continue;
+        }
         const record = normalizeEntry(entry, normalized);
         record.lemma = normalized;
         entryStore.put(record);
@@ -218,11 +222,105 @@ window.LexicalDB = (() => {
           const formKey = normalizeLookupKey(form);
           if (formKey) formStore.put({ form: formKey, lemma: normalized });
         }
+        stats.imported++;
       }
       tx.objectStore(STORE_META).put({ key: 'updatedAt', value: Date.now() });
       tx.oncomplete = resolve;
-      tx.onerror = (event) => reject(event.target.error);
+      tx.onerror = (event) => {
+        stats.errors++;
+        reject(event.target.error);
+      };
     });
+    return stats;
+  }
+
+  function idleTick() {
+    return new Promise(resolve => {
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(() => resolve(), { timeout: 250 });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  async function importJsonlText(text, options = {}) {
+    const batchSize = Math.max(1, options.batchSize || 500);
+    const stats = { imported: 0, skipped: 0, errors: 0 };
+    let batch = [];
+
+    async function flush() {
+      if (!batch.length) return;
+      const result = await importEntries(batch);
+      stats.imported += result.imported;
+      stats.skipped += result.skipped;
+      stats.errors += result.errors;
+      batch = [];
+      await idleTick();
+    }
+
+    const lines = String(text || '').split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        batch.push(JSON.parse(line));
+      } catch {
+        stats.errors++;
+        continue;
+      }
+      if (batch.length >= batchSize) await flush();
+    }
+    await flush();
+    return stats;
+  }
+
+  async function importJsonlFile(file, options = {}) {
+    if (!file) return { imported: 0, skipped: 0, errors: 1 };
+    if (!file.stream || !window.TextDecoderStream) {
+      return importJsonlText(await file.text(), options);
+    }
+
+    const batchSize = Math.max(1, options.batchSize || 500);
+    const stats = { imported: 0, skipped: 0, errors: 0 };
+    const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = '';
+    let batch = [];
+
+    async function flush() {
+      if (!batch.length) return;
+      const result = await importEntries(batch);
+      stats.imported += result.imported;
+      stats.skipped += result.skipped;
+      stats.errors += result.errors;
+      batch = [];
+      await idleTick();
+    }
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          batch.push(JSON.parse(line));
+        } catch {
+          stats.errors++;
+        }
+        if (batch.length >= batchSize) await flush();
+      }
+    }
+    if (buffer.trim()) {
+      try {
+        batch.push(JSON.parse(buffer));
+      } catch {
+        stats.errors++;
+      }
+    }
+    await flush();
+    return stats;
   }
 
   function isReady() {
@@ -248,5 +346,7 @@ window.LexicalDB = (() => {
     isReady,
     clearRuntimeCache,
     importEntries,
+    importJsonlText,
+    importJsonlFile,
   };
 })();

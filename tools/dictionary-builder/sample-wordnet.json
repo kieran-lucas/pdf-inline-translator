@@ -1,0 +1,32 @@
+{
+  "entries": [
+    {
+      "lemma": "study",
+      "pos": "noun",
+      "definition": "a detailed critical inspection",
+      "synonyms": ["research", "examination"],
+      "antonyms": []
+    },
+    {
+      "lemma": "education",
+      "pos": "noun",
+      "definition": "the activities of educating or instructing",
+      "synonyms": ["instruction", "teaching"],
+      "antonyms": []
+    },
+    {
+      "lemma": "computer",
+      "pos": "noun",
+      "definition": "a machine for performing calculations automatically",
+      "synonyms": ["computing machine"],
+      "antonyms": []
+    },
+    {
+      "lemma": "obscure",
+      "pos": "adjective",
+      "definition": "not clearly understood or expressed",
+      "synonyms": ["unclear"],
+      "antonyms": ["clear"]
+    }
+  ]
+}

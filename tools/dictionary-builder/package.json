@@ -1,0 +1,13 @@
+{
+  "name": "pdf-inline-translator-dictionary-builder",
+  "version": "0.2.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build:sample": "node build-dictionary.js --kaikki ./sample-kaikki.jsonl --cmudict ./sample-cmudict.txt --wordnet ./sample-wordnet.json --coreOut ./tmp/sample-core.json --fullOut ./tmp/sample-full.jsonl --limit 200",
+    "download:sources": "node download-sources.js --config ./sources.json",
+    "build:core": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --coreOut ../../dictionaries/en-vi-core.generated.json --limit 20000",
+    "build:full": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000",
+    "build:all": "node build-dictionary.js --kaikki ./sources/kaikki-en.jsonl --cmudict ./sources/cmudict.txt --wordnet ./sources/english-wordnet.json --coreOut ../../dictionaries/en-vi-core.generated.json --fullOut ../../dictionaries/en-vi-full.generated.jsonl --limit 20000"
+  }
+}

@@ -1,0 +1,8 @@
+sources/
+tmp/
+*.dump
+*.raw
+*.bz2
+*.gz
+*.xz
+*.jsonl.tmp

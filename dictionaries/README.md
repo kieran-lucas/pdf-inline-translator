@@ -1,16 +1,51 @@
 # Offline lexical dictionaries
 
-`en-vi-core.json` is a small seed dictionary bundled with the extension. It is meant to make common single-word lookup instant and offline, without spending Gemini quota.
+`en-vi-core.json` is the active bundled seed dictionary. The extension loads it at startup for fast, offline English-to-Vietnamese single-word lookup before any Gemini fallback.
 
-The JSON shape is intentionally richer than a string map. Entries can hold lemmas, forms, parts of speech, IPA/ARPABET pronunciation, Vietnamese meanings, English definitions, examples, collocations, synonyms, antonyms, source metadata, and quality metadata. Most seed entries are compact today, but the runtime tolerates missing fields.
+## Generated Core Workflow
 
-Future full dictionaries should be generated offline from public/open sources and imported into IndexedDB instead of being loaded fully into memory at startup.
+Phase 2 builder output goes to `en-vi-core.generated.json`. The runtime does not automatically prefer this file. Review its size and quality first, then replace or copy it to `en-vi-core.json` when you want to bundle it with the extension.
 
-Recommended future sources:
-- Kaikki/Wiktionary extracted data for translations, IPA, pronunciations, examples, related terms, and forms.
-- Open English WordNet for definitions, synonyms, antonyms, and semantic relations.
-- CMUdict for US pronunciation/ARPABET fallback.
+Example:
 
-Do not include unknown-license StarDict files blindly. Keep source/provenance metadata with generated entries.
+```bash
+cd tools/dictionary-builder
+npm run build:sample
+npm run build:all
+```
 
-Large dictionary packages should be imported into the `lexical-db` IndexedDB database using `window.LexicalDB.importEntries()` or a future import UI/tool. The extension should continue to load only the small core dictionary into memory.
+`en-vi-core.generated.json` may be committed only when it is reasonably sized and reviewed.
+
+## Full Dictionary Workflow
+
+`en-vi-full.generated.jsonl` is intended for IndexedDB import, one lexical entry per line. It can include richer English-only entries with definitions, pronunciation, synonyms, antonyms, examples, and collocations. Large full files should usually stay uncommitted and are ignored by default.
+
+Developer import helpers are exposed in the viewer runtime:
+
+```js
+await window.LexicalDB.importEntries(entries)
+await window.LexicalDB.importJsonlText(jsonlText)
+await window.LexicalDB.importJsonlFile(file)
+```
+
+Imported entries are stored in the `lexical-db` IndexedDB database with a form index, then found through `lookupFull()`.
+
+## Runtime Lookup Order
+
+1. In-memory core dictionary from `en-vi-core.json`.
+2. Full dictionary entries previously imported into IndexedDB.
+3. Gemini fallback, only when enabled in settings.
+
+The extension never downloads dictionary source data at runtime and does not require Node.js at runtime.
+
+## Source Policy
+
+Recommended builder sources:
+
+- Kaikki/Wiktionary extracted English JSONL for entries, Vietnamese translations, IPA, examples, forms, related terms, derived terms, and compounds.
+- Open English WordNet for English definitions, synonyms, antonyms, and semantic relations.
+- CMUdict for US ARPABET pronunciation fallback.
+
+Future fields supported by the entry shape include IPA, audio, definitions, examples, collocations, synonyms, antonyms, forms, source metadata, and quality metadata.
+
+Do not commit raw source dumps. Do not use random StarDict dictionaries unless the license is verified.
