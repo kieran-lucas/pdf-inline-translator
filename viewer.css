@@ -506,6 +506,13 @@ body {
 .settings-clear-btn:hover  { background: #991b1b; }
 .settings-clear-btn:active { background: #7f1d1d; }
 
+.settings-clear-cache-btn {
+  background: #374151;
+}
+
+.settings-clear-cache-btn:hover  { background: #4b5563; }
+.settings-clear-cache-btn:active { background: #374151; }
+
 .settings-status {
   font-size: 12px;
   min-height: 1em;

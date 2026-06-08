@@ -44,6 +44,11 @@
   // Rect stored when a popup opens; used for re-placement after content loads.
   let openRect = null;
 
+  // Incremented each time openPopup is called. Each call captures myGen and
+  // checks it after every await — if it no longer matches, the popup has been
+  // superseded by a newer selection and the stale result is silently discarded.
+  let popupGeneration = 0;
+
   // ── Visibility helpers ─────────────────────────────────────────────────────
 
   function hideTxBtn() { txBtn.classList.add('tx-hidden');   }
@@ -256,6 +261,7 @@
   const MAX_PREVIEW = 120;
 
   async function openPopup(text, rect) {
+    const myGen = ++popupGeneration; // capture before any await
     openRect = rect;
 
     const preview = text.length > MAX_PREVIEW
@@ -274,6 +280,7 @@
         `${window.Translator.MAX_CHARS} chars). Shorten your selection to translate inline.`;
       txBody.appendChild(msg);
       const settings = await window.Translator.loadSettings();
+      if (myGen !== popupGeneration) return; // superseded while awaiting settings
       txBody.appendChild(makeFallbackBtn(text, settings));
       hidePopup();
       place(txPopup, rect);
@@ -281,13 +288,16 @@
     }
 
     // Show loading state immediately, then fire the API call.
+    // translate() checks L1 → L2 → API and deduplicates concurrent requests.
     setBodyLoading();
     hidePopup();
     place(txPopup, rect);
 
     const result = await window.Translator.translate(text);
 
-    // User may have closed the popup while the request was in flight.
+    // Discard stale result: a newer selection opened while we were waiting.
+    if (myGen !== popupGeneration) return;
+    // Also discard if user manually dismissed the popup.
     if (txPopup.classList.contains('tx-hidden')) return;
 
     if (result.ok) {

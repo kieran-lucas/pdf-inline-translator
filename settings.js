@@ -11,9 +11,10 @@
   const apiKeyInput = document.getElementById('settings-api-key');
   const targetInput = document.getElementById('settings-target-lang');
   const sourceInput = document.getElementById('settings-source-lang');
-  const saveBtn     = document.getElementById('settings-save');
-  const clearBtn    = document.getElementById('settings-clear');
-  const statusEl    = document.getElementById('settings-status');
+  const saveBtn       = document.getElementById('settings-save');
+  const clearBtn      = document.getElementById('settings-clear');
+  const clearCacheBtn = document.getElementById('settings-clear-cache');
+  const statusEl      = document.getElementById('settings-status');
 
   let statusTimer = null;
 
@@ -76,6 +77,13 @@
     apiKeyInput.value = '';
     setKeyIndicator(false);
     showStatus('API key cleared.', false);
+  });
+
+  // ── Clear cache ────────────────────────────────────────────────────────────
+
+  clearCacheBtn.addEventListener('click', async () => {
+    await window.Translator.clearCache();
+    showStatus('Translation cache cleared.', false);
   });
 
   // ── Initialize indicator on load (panel stays closed) ─────────────────────
