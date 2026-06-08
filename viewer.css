@@ -145,6 +145,21 @@ body {
   background: #1d4ed8;
 }
 
+#zoom-select {
+  padding: 5px 6px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2b2b2b;
+  color: #eee;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+
+#zoom-select:focus {
+  border-color: #3b82f6;
+}
+
 /* ── Status bars ──────────────────────────────────────────────────────────── */
 
 #error-bar {
