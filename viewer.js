@@ -685,7 +685,10 @@ async function renderAnnotationLayer(page, slot, viewport, generation) {
   annotDiv.style.pointerEvents = 'none';
 
   const annotations = await page.getAnnotations({ intent: 'display' });
-  if (generation !== currentGeneration) return;
+  if (generation !== currentGeneration) {
+    annotDiv.style.pointerEvents = '';
+    return;
+  }
 
   for (const ann of annotations) {
     if (ann.subtype !== 'Link') continue;
@@ -701,7 +704,7 @@ async function renderAnnotationLayer(page, slot, viewport, generation) {
     const width  = Math.abs(vx2 - vx1);
     const height = Math.abs(vy2 - vy1);
 
-    if (width < 1 || height < 1) continue;
+    if (!Number.isFinite(left) || !Number.isFinite(top) || width < 1 || height < 1) continue;
 
     const linkDiv = document.createElement('div');
     linkDiv.className = 'annotationLink';
@@ -774,6 +777,7 @@ async function buildOutline(pdfDoc) {
   outlinePanel.classList.add('hidden');
   outlineList.innerHTML = '';
 
+  const gen = currentGeneration;
   let outline;
   try {
     outline = await pdfDoc.getOutline();
@@ -781,6 +785,8 @@ async function buildOutline(pdfDoc) {
     return;
   }
 
+  // Another document loaded while we were waiting — discard stale outline.
+  if (gen !== currentGeneration) return;
   if (!outline || outline.length === 0) return;
 
   function buildItems(items, ul) {
