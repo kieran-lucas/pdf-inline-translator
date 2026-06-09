@@ -1,10 +1,12 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
+const fs       = require('fs');
+const path     = require('path');
 const readline = require('readline');
 
-const BUILDER_VERSION = '0.2.0';
+const BUILDER_VERSION = '0.3.0';
+
+// ── CLI args ───────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
   const args = { limit: 20000 };
@@ -18,6 +20,8 @@ function parseArgs(argv) {
   args.limit = Math.max(1, Number(args.limit || 20000));
   return args;
 }
+
+// ── Shared text helpers ────────────────────────────────────────────────────────
 
 function normalizeLookupKey(text) {
   return String(text || '')
@@ -52,6 +56,8 @@ function termWords(items) {
   return out;
 }
 
+// ── Vietnamese translation helpers ────────────────────────────────────────────
+
 function isVietnameseTranslation(item) {
   const lang = String(item?.lang || item?.language || item?.lang_name || '').toLowerCase();
   const code = String(item?.lang_code || item?.code || item?.language_code || '').toLowerCase();
@@ -67,6 +73,8 @@ function extractViTranslations(items) {
   return out;
 }
 
+// ── Entry helpers ──────────────────────────────────────────────────────────────
+
 function sourceArray(entry, bucket, source) {
   entry.source[bucket] = entry.source[bucket] || [];
   if (!entry.source[bucket].includes(source)) entry.source[bucket].push(source);
@@ -75,21 +83,70 @@ function sourceArray(entry, bucket, source) {
 function blankEntry(lemma) {
   return {
     lemma,
-    language: 'en',
+    language:      'en',
     frequencyRank: null,
-    forms: [],
-    pos: [],
-    pronunciations: [],
-    senses: [],
-    source: { translation: [], definition: [], pronunciation: [] },
-    quality: { verified: false, confidence: 0.35 },
+    forms:         [],
+    pos:           [],
+    pronunciations:[],
+    senses:        [],
+    source:        { translation: [], definition: [], pronunciation: [] },
+    quality:       { verified: false, confidence: 0.35 },
   };
 }
+
+function hasVietnamese(entry) {
+  return entry.senses.some(s => s.viMeanings?.length);
+}
+
+function hasUsefulContent(entry) {
+  return entry.senses.some(s => s.viMeanings?.length || s.enDefinition || s.synonyms?.length) ||
+    entry.pronunciations.length > 0;
+}
+
+function isUsefulLemma(lemma) {
+  return /^[a-z][a-z' -]{0,48}$/i.test(lemma) &&
+    !/[._]{2,}/.test(lemma) &&
+    !/^[\W_]+$/u.test(lemma) &&
+    lemma.split(/\s+/).length <= 4;
+}
+
+// ── Merge helpers ──────────────────────────────────────────────────────────────
+
+function mergeArray(target, values, max) {
+  for (const value of values || []) uniquePush(target, value, max);
+}
+
+function mergePronunciations(entry, pronunciations) {
+  for (const pron of pronunciations || []) {
+    const duplicate = entry.pronunciations.some(p =>
+      (pron.ipa && p.ipa === pron.ipa) || (pron.arpabet && p.arpabet === pron.arpabet)
+    );
+    if (!duplicate && entry.pronunciations.length < 3) entry.pronunciations.push(pron);
+  }
+}
+
+function mergeEntries(a, b) {
+  if (!a) return b;
+  mergeArray(a.forms, b.forms, 60);
+  mergeArray(a.pos, b.pos, 12);
+  mergePronunciations(a, b.pronunciations);
+  for (const sense of b.senses) {
+    a.senses.push(sense);
+    if (a.senses.length >= 12) break;
+  }
+  for (const bucket of ['translation', 'definition', 'pronunciation']) {
+    for (const source of b.source?.[bucket] || []) sourceArray(a, bucket, source);
+  }
+  a.quality.confidence = Math.max(a.quality.confidence || 0, b.quality?.confidence || 0);
+  return a;
+}
+
+// ── Kaikki extraction ──────────────────────────────────────────────────────────
 
 function extractPronunciations(raw) {
   const pronunciations = [];
   for (const sound of asArray(raw.sounds)) {
-    const ipa = cleanText(sound?.ipa || sound?.enpr || sound?.rhymes, 80);
+    const ipa   = cleanText(sound?.ipa || sound?.enpr || sound?.rhymes, 80);
     const audio = cleanText(sound?.audio || sound?.ogg_url || sound?.mp3_url, 300) || null;
     if (!ipa && !audio) continue;
     pronunciations.push({ accent: sound?.tags?.includes?.('US') ? 'US' : null, ipa: ipa || null, arpabet: null, audio });
@@ -121,12 +178,12 @@ function extractSense(raw, rawSense, globalVi) {
 
   const glosses = asArray(rawSense.glosses).concat(asArray(rawSense.raw_glosses));
   return {
-    pos: cleanText(rawSense.pos || raw.pos, 40) || null,
+    pos:          cleanText(rawSense.pos || raw.pos, 40) || null,
     enDefinition: cleanText(glosses[0] || rawSense.gloss || rawSense.definition, 220) || null,
     viMeanings,
     examples,
-    synonyms: termWords(rawSense.synonyms || raw.synonyms).slice(0, 20),
-    antonyms: termWords(rawSense.antonyms || raw.antonyms).slice(0, 20),
+    synonyms:     termWords(rawSense.synonyms || raw.synonyms).slice(0, 20),
+    antonyms:     termWords(rawSense.antonyms || raw.antonyms).slice(0, 20),
     collocations: termWords(
       []
         .concat(asArray(rawSense.related), asArray(raw.related))
@@ -157,11 +214,8 @@ function entryFromKaikki(raw) {
   }
   if (!entry.senses.length && globalVi.length) {
     entry.senses.push({
-      pos: entry.pos[0] || null,
-      enDefinition: null,
-      viMeanings: globalVi,
-      examples: [],
-      synonyms: termWords(raw.synonyms).slice(0, 20),
+      pos: entry.pos[0] || null, enDefinition: null, viMeanings: globalVi,
+      examples: [], synonyms: termWords(raw.synonyms).slice(0, 20),
       antonyms: termWords(raw.antonyms).slice(0, 20),
       collocations: termWords([].concat(asArray(raw.related), asArray(raw.derived), asArray(raw.compounds))).slice(0, 20),
     });
@@ -172,50 +226,59 @@ function entryFromKaikki(raw) {
   return hasUsefulContent(entry) ? entry : null;
 }
 
-function hasUsefulContent(entry) {
-  return entry.senses.some(s => s.viMeanings?.length || s.enDefinition || s.synonyms?.length) ||
-    entry.pronunciations.length > 0;
-}
+// ── FVDP → Kaikki enrichment ───────────────────────────────────────────────────
+//
+// When FVDP is the primary VI source, Kaikki is used only to add:
+//   - word forms (inflections)
+//   - IPA pronunciation (if Kaikki has a better one)
+//   - English definitions for senses that lack them
+//   - synonyms / antonyms / collocations
+//   - Kaikki VI meanings appended only if not already present (secondary)
+//
+// Kaikki alone never creates a core hit when FVDP is the primary source.
 
-function hasVietnamese(entry) {
-  return entry.senses.some(s => s.viMeanings?.length);
-}
+function enrichFvdpEntryWithKaikki(fvdp, kaikki) {
+  // Merge word forms (FVDP has none).
+  mergeArray(fvdp.forms, kaikki.forms, 60);
+  for (const p of kaikki.pos) {
+    if (!fvdp.pos.includes(p)) fvdp.pos.push(p);
+  }
 
-function isUsefulLemma(lemma) {
-  return /^[a-z][a-z' -]{0,48}$/i.test(lemma) &&
-    !/[._]{2,}/.test(lemma) &&
-    !/^[\W_]+$/u.test(lemma) &&
-    lemma.split(/\s+/).length <= 4;
-}
+  // Merge IPA pronunciations.
+  mergePronunciations(fvdp, kaikki.pronunciations);
+  if (kaikki.pronunciations.length) sourceArray(fvdp, 'pronunciation', 'kaikki-wiktionary');
 
-function mergeArray(target, values, max) {
-  for (const value of values || []) uniquePush(target, value, max);
-}
+  // For each Kaikki sense, try to enrich a matching FVDP sense.
+  for (const ks of kaikki.senses) {
+    // Find best matching FVDP sense: same POS first, then first sense without EN def.
+    let target = null;
+    if (ks.pos) target = fvdp.senses.find(s => s.pos && s.pos.toLowerCase().includes(ks.pos.toLowerCase()));
+    if (!target) target = fvdp.senses.find(s => !s.enDefinition);
+    if (!target && fvdp.senses.length === 0) {
+      // FVDP entry had no senses — shouldn't happen but guard anyway.
+      target = { pos: ks.pos, enDefinition: null, viMeanings: [], examples: [], synonyms: [], antonyms: [], collocations: [] };
+      fvdp.senses.push(target);
+    }
 
-function mergePronunciations(entry, pronunciations) {
-  for (const pron of pronunciations || []) {
-    const duplicate = entry.pronunciations.some(p =>
-      (pron.ipa && p.ipa === pron.ipa) || (pron.arpabet && p.arpabet === pron.arpabet)
-    );
-    if (!duplicate && entry.pronunciations.length < 3) entry.pronunciations.push(pron);
+    if (target) {
+      if (!target.enDefinition && ks.enDefinition) {
+        target.enDefinition = ks.enDefinition;
+        sourceArray(fvdp, 'definition', 'kaikki-wiktionary');
+      }
+      mergeArray(target.synonyms,     ks.synonyms,     20);
+      mergeArray(target.antonyms,     ks.antonyms,     20);
+      mergeArray(target.collocations, ks.collocations, 20);
+      // Append Kaikki VI meanings only if not already covered by FVDP.
+      for (const vi of ks.viMeanings) uniquePush(target.viMeanings, vi, 8);
+      // Add examples if the FVDP sense lacks them.
+      for (const ex of ks.examples) {
+        if (target.examples.length < 3) target.examples.push(ex);
+      }
+    }
   }
 }
 
-function mergeEntries(a, b) {
-  if (!a) return b;
-  mergeArray(a.forms, b.forms, 60);
-  mergeArray(a.pos, b.pos, 12);
-  mergePronunciations(a, b.pronunciations);
-  for (const sense of b.senses) {
-    a.senses.push(sense);
-    if (a.senses.length >= 12) break;
-  }
-  for (const bucket of ['translation', 'definition', 'pronunciation']) {
-    for (const source of b.source?.[bucket] || []) sourceArray(a, bucket, source);
-  }
-  a.quality.confidence = Math.max(a.quality.confidence || 0, b.quality?.confidence || 0);
-  return a;
-}
+// ── Supplementary enrichment sources ──────────────────────────────────────────
 
 function parseCmudict(filePath) {
   const map = new Map();
@@ -225,7 +288,7 @@ function parseCmudict(filePath) {
     if (!line.trim() || line.startsWith(';;;')) continue;
     const match = line.match(/^(\S+)\s+(.+)$/);
     if (!match) continue;
-    const lemma = normalizeLookupKey(match[1].replace(/\(\d+\)$/u, ''));
+    const lemma   = normalizeLookupKey(match[1].replace(/\(\d+\)$/u, ''));
     const arpabet = cleanText(match[2], 120);
     if (!lemma || !arpabet) continue;
     if (!map.has(lemma)) map.set(lemma, []);
@@ -238,7 +301,7 @@ function parseCmudict(filePath) {
 function parseWordnet(filePath) {
   const map = new Map();
   if (!filePath || !fs.existsSync(filePath)) return map;
-  const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const raw     = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   const entries = Array.isArray(raw) ? raw : asArray(raw.entries || raw.synsets || raw.words);
   for (const item of entries) {
     const lemmas = item.lemmas || item.words || [item.lemma || item.word].filter(Boolean);
@@ -247,10 +310,10 @@ function parseWordnet(filePath) {
       if (!lemma) continue;
       if (!map.has(lemma)) map.set(lemma, []);
       map.get(lemma).push({
-        pos: cleanText(item.pos || item.partOfSpeech, 40) || null,
+        pos:          cleanText(item.pos || item.partOfSpeech, 40) || null,
         enDefinition: cleanText(item.definition || item.gloss || asArray(item.glosses)[0], 240) || null,
-        synonyms: termWords(item.synonyms || item.lemmas || item.words).filter(w => normalizeLookupKey(w) !== lemma).slice(0, 20),
-        antonyms: termWords(item.antonyms).slice(0, 20),
+        synonyms:     termWords(item.synonyms || item.lemmas || item.words).filter(w => normalizeLookupKey(w) !== lemma).slice(0, 20),
+        antonyms:     termWords(item.antonyms).slice(0, 20),
       });
     }
   }
@@ -271,14 +334,9 @@ function applyWordnet(entry, wordnetMap) {
   if (!items?.length) return;
   for (const item of items.slice(0, 5)) {
     const matching = entry.senses.find(s => item.pos && s.pos === item.pos && !s.enDefinition);
-    const sense = matching || {
-      pos: item.pos,
-      enDefinition: null,
-      viMeanings: [],
-      examples: [],
-      synonyms: [],
-      antonyms: [],
-      collocations: [],
+    const sense    = matching || {
+      pos: item.pos, enDefinition: null, viMeanings: [], examples: [],
+      synonyms: [], antonyms: [], collocations: [],
     };
     if (!sense.enDefinition && item.enDefinition) sense.enDefinition = item.enDefinition;
     mergeArray(sense.synonyms, item.synonyms, 20);
@@ -288,38 +346,79 @@ function applyWordnet(entry, wordnetMap) {
   sourceArray(entry, 'definition', 'wordnet');
 }
 
-function capEntry(entry, rich) {
-  const maxSenses = rich ? 12 : 5;
-  const maxExamples = rich ? 4 : 2;
-  const maxTerms = rich ? 20 : 10;
-  const capped = {
-    ...entry,
-    forms: entry.forms.slice(0, rich ? 60 : 20),
-    pos: entry.pos.slice(0, 8),
-    pronunciations: entry.pronunciations.slice(0, 3),
-    senses: entry.senses.slice(0, maxSenses).map(s => ({
-      pos: s.pos || null,
-      enDefinition: s.enDefinition || null,
-      viMeanings: asArray(s.viMeanings).slice(0, rich ? 10 : 5),
-      examples: asArray(s.examples).slice(0, maxExamples),
-      synonyms: asArray(s.synonyms).slice(0, maxTerms),
-      antonyms: asArray(s.antonyms).slice(0, maxTerms),
-      collocations: asArray(s.collocations).slice(0, maxTerms),
-    })),
-  };
-  return capped;
-}
+// ── Scoring & capping ──────────────────────────────────────────────────────────
+
+// Words that must always be included in the active core.
+const MUST_INCLUDE_LEMMAS = new Set([
+  // Task-required test words
+  'protection','development','environment','responsibility','education',
+  'research','science','method','result','function','variable','theorem',
+  'table','society','culture','history','language','computer','data',
+  'system','problem','student','teacher','school','university','important',
+  'different','possible','necessary','information','knowledge','government',
+  'economic','health','family','children','people','world',
+  // Common academic / PDF vocabulary
+  'analysis','definition','algorithm','equation','figure','paragraph',
+  'sentence','performance','memory','graph','proof','theory','business',
+  'company','country','national','international','management','market',
+  'number','order','product','quality','service','structure','value',
+  'work','year','time','place','case','area','point','group','example',
+  'power','type','state','part','fact','program','process','section',
+  'level','field','model','network','design','paper','chapter','section',
+  'translation','measure','dimension','set','class','object','layer',
+]);
 
 function scoreCoreEntry(entry) {
   let score = 0;
   if (hasVietnamese(entry)) score += 1000;
-  if (/^[a-z]{2,18}$/i.test(entry.lemma)) score += 100;
-  if (entry.pos.length) score += 30;
-  if (entry.senses.length) score += 30;
-  if (entry.pronunciations.length) score += 15;
-  if (/(study|education|research|paper|chapter|section|computer|data|system|method|result|analysis|theory)/i.test(entry.lemma)) score += 20;
-  score -= Math.max(0, entry.lemma.length - 20);
+  // FVDP entries are preferred over Kaikki-only entries.
+  if (entry.source?.translation?.includes('fvdp-ho-ngoc-duc')) score += 500;
+
+  const lemma = entry.lemma;
+  const len   = lemma.length;
+
+  // Guaranteed high score for must-include vocabulary.
+  if (MUST_INCLUDE_LEMMAS.has(lemma)) score += 2000;
+
+  if (/^[a-z]+$/i.test(lemma)) {
+    // Pure single-word: shorter is more common. len=2→+178, len=10→+90, len=20→+2.
+    score += Math.max(0, Math.round(200 - (len - 2) * 11.1));
+  }
+  // Multi-word phrases are much less useful for per-word PDF lookup.
+  const wordCount = lemma.split(/\s+/).length;
+  if (wordCount > 1) score -= wordCount * 100;
+  // Hyphenated compounds: slight de-priority.
+  if (lemma.includes('-')) score -= 50;
+
+  // Richness signals: more senses / VI meanings = more important word.
+  const viCount = (entry.senses || []).reduce((n, s) => n + (s.viMeanings?.length || 0), 0);
+  score += Math.min(viCount, 6) * 5;
+  if (entry.pos.length)             score += 15;
+  if (entry.senses.length)          score += 15;
+  if (entry.pronunciations.length)  score += 10;
+
   return score;
+}
+
+function capEntry(entry, rich) {
+  const maxSenses = rich ? 12 : 5;
+  const maxExamples = rich ? 4 : 2;
+  const maxTerms = rich ? 20 : 10;
+  return {
+    ...entry,
+    forms:         entry.forms.slice(0, rich ? 60 : 20),
+    pos:           entry.pos.slice(0, 8),
+    pronunciations:entry.pronunciations.slice(0, 3),
+    senses: entry.senses.slice(0, maxSenses).map(s => ({
+      pos:          s.pos          || null,
+      enDefinition: s.enDefinition || null,
+      viMeanings:   asArray(s.viMeanings).slice(0, rich ? 10 : 5),
+      examples:     asArray(s.examples).slice(0, maxExamples),
+      synonyms:     asArray(s.synonyms).slice(0, maxTerms),
+      antonyms:     asArray(s.antonyms).slice(0, maxTerms),
+      collocations: asArray(s.collocations).slice(0, maxTerms),
+    })),
+  };
 }
 
 function pruneCoreCandidates(map, limit) {
@@ -337,18 +436,42 @@ function ensureParent(filePath) {
   fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
 }
 
+// ── Build ──────────────────────────────────────────────────────────────────────
+
 async function build(args) {
-  if (!args.kaikki) throw new Error('Missing --kaikki path');
-  const kaikkiPath = path.resolve(args.kaikki);
-  if (!fs.existsSync(kaikkiPath)) throw new Error(`Kaikki JSONL not found: ${kaikkiPath}`);
+  const hasFvdp   = !!(args.fvdp && fs.existsSync(path.resolve(args.fvdp)));
+  const hasKaikki = !!(args.kaikki && fs.existsSync(path.resolve(args.kaikki)));
 
-  const cmuMap = parseCmudict(args.cmudict && path.resolve(args.cmudict));
-  const wordnetMap = parseWordnet(args.wordnet && path.resolve(args.wordnet));
+  if (!hasFvdp && !hasKaikki) {
+    throw new Error('Missing source: provide --fvdp (primary) and/or --kaikki (enrichment)');
+  }
+
+  // ── Step 1: Load FVDP as primary Vietnamese source ──────────────────────────
   const coreCandidates = new Map();
-  const stats = { lines: 0, malformed: 0, acceptedFull: 0, acceptedCore: 0 };
 
-  let fullStream = null;
+  if (hasFvdp) {
+    console.error('Loading FVDP source:', path.resolve(args.fvdp));
+    const { parseFvdpFile } = require('./parse-fvdp');
+    const { map: fvdpMap, stats: fvdpStats } = await parseFvdpFile(path.resolve(args.fvdp));
+    console.error(`FVDP: ${fvdpStats.total} entries loaded, ${fvdpStats.withVi} with Vietnamese meanings`);
+
+    for (const [lemma, entry] of fvdpMap) {
+      if (isUsefulLemma(lemma) && hasVietnamese(entry)) {
+        coreCandidates.set(lemma, entry);
+      }
+    }
+    console.error(`FVDP core candidates: ${coreCandidates.size}`);
+  }
+
+  // ── Step 2: Load enrichment sources ─────────────────────────────────────────
+  const cmuMap     = parseCmudict(args.cmudict  && path.resolve(args.cmudict));
+  const wordnetMap = parseWordnet(args.wordnet   && path.resolve(args.wordnet));
+
+  const stats = { lines: 0, malformed: 0, acceptedFull: 0, kaikkiEnriched: 0, kaikkiNewVi: 0 };
+
+  let fullStream       = null;
   let pendingFullEntry = null;
+
   if (args.fullOut) {
     ensureParent(args.fullOut);
     fullStream = fs.createWriteStream(path.resolve(args.fullOut), 'utf8');
@@ -361,37 +484,57 @@ async function build(args) {
     pendingFullEntry = null;
   }
 
-  const rl = readline.createInterface({
-    input: fs.createReadStream(kaikkiPath, 'utf8'),
-    crlfDelay: Infinity,
-  });
+  // ── Step 3: Stream Kaikki for enrichment (and secondary VI entries) ──────────
+  if (hasKaikki) {
+    const kaikkiPath = path.resolve(args.kaikki);
+    console.error('Streaming Kaikki JSONL for enrichment:', kaikkiPath);
 
-  for await (const line of rl) {
-    stats.lines++;
-    if (!line.trim()) continue;
-    let raw;
-    try {
-      raw = JSON.parse(line);
-    } catch {
-      stats.malformed++;
-      continue;
+    const rl = readline.createInterface({
+      input:      fs.createReadStream(kaikkiPath, 'utf8'),
+      crlfDelay:  Infinity,
+    });
+
+    for await (const line of rl) {
+      stats.lines++;
+      if (!line.trim()) continue;
+      let raw;
+      try { raw = JSON.parse(line); } catch { stats.malformed++; continue; }
+
+      const entry = entryFromKaikki(raw);
+      if (!entry || !isUsefulLemma(entry.lemma)) continue;
+
+      applyCmudict(entry, cmuMap);
+      applyWordnet(entry, wordnetMap);
+      if (!hasUsefulContent(entry)) continue;
+
+      if (hasFvdp && coreCandidates.has(entry.lemma)) {
+        // FVDP entry exists: enrich it with Kaikki data.
+        enrichFvdpEntryWithKaikki(coreCandidates.get(entry.lemma), entry);
+        stats.kaikkiEnriched++;
+      } else if (!hasFvdp && hasVietnamese(entry)) {
+        // Kaikki-only mode (no FVDP): use Kaikki as primary VI source.
+        const merged = mergeEntries(coreCandidates.get(entry.lemma), entry);
+        coreCandidates.set(entry.lemma, merged);
+        if (coreCandidates.size % 5000 === 0) pruneCoreCandidates(coreCandidates, args.limit);
+      } else if (hasFvdp && hasVietnamese(entry) && !coreCandidates.has(entry.lemma)) {
+        // Kaikki has Vietnamese for a word NOT in FVDP — add as secondary entry.
+        coreCandidates.set(entry.lemma, entry);
+        stats.kaikkiNewVi++;
+        if (coreCandidates.size % 5000 === 0) pruneCoreCandidates(coreCandidates, args.limit);
+      }
+
+      // Full JSONL stream: include everything with useful content.
+      if (fullStream && (hasVietnamese(entry) || entry.senses.some(s => s.enDefinition || s.synonyms.length) || entry.pronunciations.length)) {
+        if (pendingFullEntry && pendingFullEntry.lemma !== entry.lemma) writePendingFull();
+        pendingFullEntry = mergeEntries(pendingFullEntry, entry);
+      }
     }
-    const entry = entryFromKaikki(raw);
-    if (!entry || !isUsefulLemma(entry.lemma)) continue;
-    applyCmudict(entry, cmuMap);
-    applyWordnet(entry, wordnetMap);
-    if (!hasUsefulContent(entry)) continue;
-
-    if (fullStream && (hasVietnamese(entry) || entry.senses.some(s => s.enDefinition || s.synonyms.length) || entry.pronunciations.length)) {
-      if (pendingFullEntry && pendingFullEntry.lemma !== entry.lemma) writePendingFull();
-      pendingFullEntry = mergeEntries(pendingFullEntry, entry);
-    }
-
-    if (hasVietnamese(entry)) {
-      const merged = mergeEntries(coreCandidates.get(entry.lemma), entry);
-      coreCandidates.set(entry.lemma, merged);
-      stats.acceptedCore++;
-      if (stats.acceptedCore % 5000 === 0) pruneCoreCandidates(coreCandidates, args.limit);
+  } else if (hasFvdp) {
+    // No Kaikki: still apply CMUdict and WordNet to FVDP entries.
+    console.error('No Kaikki source — applying CMUdict and WordNet to FVDP entries only.');
+    for (const entry of coreCandidates.values()) {
+      applyCmudict(entry, cmuMap);
+      applyWordnet(entry, wordnetMap);
     }
   }
 
@@ -403,6 +546,7 @@ async function build(args) {
     });
   }
 
+  // ── Step 4: Write core dictionary ─────────────────────────────────────────────
   if (args.coreOut) {
     ensureParent(args.coreOut);
     pruneCoreCandidates(coreCandidates, args.limit);
@@ -411,31 +555,42 @@ async function build(args) {
       .sort((a, b) => scoreCoreEntry(b) - scoreCoreEntry(a))
       .slice(0, args.limit)
       .sort((a, b) => a.lemma.localeCompare(b.lemma));
+
     const entries = {};
     for (const entry of selected) entries[entry.lemma] = capEntry(entry, false);
+
+    const translationSources = hasFvdp
+      ? ['fvdp-ho-ngoc-duc', ...(hasKaikki ? ['kaikki-wiktionary'] : [])]
+      : ['kaikki-wiktionary'];
+
     const payload = {
-      version: 1,
+      version:      1,
       languagePair: 'en-vi',
-      generatedAt: new Date().toISOString(),
-      entryCount: selected.length,
+      generatedAt:  new Date().toISOString(),
+      entryCount:   selected.length,
       sources: {
-        translation: ['kaikki-wiktionary'],
-        definition: ['kaikki-wiktionary', ...(wordnetMap.size ? ['wordnet'] : [])],
-        pronunciation: [...(cmuMap.size ? ['cmudict'] : []), 'kaikki-wiktionary'],
+        translation:   translationSources,
+        definition:    ['kaikki-wiktionary', ...(wordnetMap.size ? ['wordnet'] : [])],
+        pronunciation: [...(cmuMap.size ? ['cmudict'] : []), 'kaikki-wiktionary', ...(hasFvdp ? ['fvdp-ho-ngoc-duc'] : [])],
       },
-      limit: args.limit,
+      primaryViSource: hasFvdp ? 'fvdp-ho-ngoc-duc' : 'kaikki-wiktionary',
+      limit:         args.limit,
       builderVersion: BUILDER_VERSION,
       entries,
     };
     fs.writeFileSync(path.resolve(args.coreOut), JSON.stringify(payload), 'utf8');
+    console.error(`Core written: ${selected.length} entries → ${path.resolve(args.coreOut)}`);
   }
 
   console.log(JSON.stringify({
     ...stats,
-    malformedWarning: stats.malformed ? `${stats.malformed} malformed JSONL line(s) skipped` : null,
-    cmudictEntries: cmuMap.size,
-    wordnetEntries: wordnetMap.size,
-    coreCandidates: coreCandidates.size,
+    mode:              hasFvdp ? 'fvdp-primary' : 'kaikki-primary',
+    fvdpCoreSeeded:    hasFvdp,
+    kaikkiUsed:        hasKaikki,
+    malformedWarning:  stats.malformed ? `${stats.malformed} malformed JSONL line(s) skipped` : null,
+    cmudictEntries:    cmuMap.size,
+    wordnetEntries:    wordnetMap.size,
+    coreCandidates:    coreCandidates.size,
   }, null, 2));
 }
 

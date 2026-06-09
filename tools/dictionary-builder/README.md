@@ -2,13 +2,21 @@
 
 This tool builds offline English-to-Vietnamese lexical dictionary files for `pdf-inline-translator`. It is a developer tool only. The Chrome extension runtime does not run Node.js and does not download dictionary data.
 
-## Supported Sources
+## Primary Source: FVDP / Ho Ngoc Duc
 
-- Kaikki/Wiktionary English JSONL: English lemmas, parts of speech, forms, senses, Vietnamese translations when present, IPA/audio fields, examples, synonyms, antonyms, related terms, derived terms, and compounds.
-- Open English WordNet JSON: English definitions, synonyms, and antonyms.
-- CMUdict text: US ARPABET pronunciation fallback.
+Vietnamese meanings come primarily from the **Free Vietnamese Dictionary Project (FVDP)** by Ho Ngoc Duc — the most complete publicly available English-Vietnamese dictionary (~108,000 entries, all with real Vietnamese meanings).
 
-Do not use random StarDict dictionaries unless the license is verified.
+FVDP is GPL-licensed. Raw source files stay in `sources/` (gitignored). See `SOURCE_AUDIT.md` for full provenance details.
+
+## Enrichment Sources
+
+| Source | Role |
+|--------|------|
+| Kaikki / Wiktionary English JSONL | IPA pronunciation, word forms, English definitions, synonyms, antonyms, examples |
+| Open English WordNet | English definitions, synonyms, antonyms |
+| CMUdict | US ARPABET pronunciation fallback |
+
+**Important:** Kaikki, WordNet, and CMUdict do NOT create Vietnamese dictionary hits on their own. An entry must have a Vietnamese meaning from FVDP (or Kaikki, as secondary) to be counted.
 
 ## Install
 
@@ -17,84 +25,168 @@ cd tools/dictionary-builder
 npm install
 ```
 
-There are no runtime dependencies. `npm install` only creates the local Node project metadata if your npm version wants it.
+No runtime dependencies. `npm install` only creates local project metadata.
 
-## Sample Build
-
-The sample build uses tiny checked-in fixtures and does not require internet access.
+## Quick Sample Build (no internet required)
 
 ```bash
 npm run build:sample
 ```
 
-Expected outputs:
+Outputs `tmp/sample-core.json` and `tmp/sample-full.jsonl` using checked-in fixtures.
 
-- `tmp/sample-core.json`
-- `tmp/sample-full.jsonl`
+## Real Builds with FVDP (recommended)
 
-The sample includes `study`, `education`, `computer`, an English-only `obscure` entry, CMUdict pronunciation fallback, WordNet merge data, and one malformed JSONL line to verify warning handling.
+### Step 1 — Get sources
 
-## Real Source Files
+Place source files in `sources/` (gitignored):
 
-Put source files here:
+| File | How to get |
+|------|------------|
+| `sources/fvdp-en-vi.txt` | Download from GitHub (see below) |
+| `sources/kaikki-en.jsonl` | Download from kaikki.org (~3 GB, optional — for enrichment) |
+| `sources/english-wordnet.json` | Open English WordNet JSON export (optional) |
+| `sources/cmudict.txt` | CMU Pronouncing Dictionary (optional) |
 
-- `sources/kaikki-en.jsonl`
-- `sources/english-wordnet.json`
-- `sources/cmudict.txt`
-
-Raw dumps are ignored because they can be huge and have independent licenses. Do not commit raw source dumps.
-
-To configure explicit downloads, copy `sources.example.json` to `sources.json` and fill only URLs you have verified:
-
+**Download FVDP (primary Vietnamese source):**
 ```bash
 node download-sources.js --config sources.json
 ```
-
-If a URL is blank, the script prints manual placement instructions instead of guessing.
-
-## Real Builds
-
+Or manually (Windows PowerShell):
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/manhminno/English-Vietnamese-Dictionary/master/data/english-vietnamese.txt" -OutFile "sources/fvdp-en-vi.txt"
+```
+Or curl:
 ```bash
-npm run build:core
-npm run build:full
-npm run build:all
+curl -L "https://raw.githubusercontent.com/manhminno/English-Vietnamese-Dictionary/master/data/english-vietnamese.txt" -o sources/fvdp-en-vi.txt
 ```
 
-Equivalent direct command:
+### Step 2 — Build generated core (all FVDP entries)
 
+FVDP only (fast, ~30 seconds):
 ```bash
-node build-dictionary.js \
-  --kaikki ./sources/kaikki-en.jsonl \
-  --cmudict ./sources/cmudict.txt \
-  --wordnet ./sources/english-wordnet.json \
-  --coreOut ../../dictionaries/en-vi-core.generated.json \
-  --fullOut ../../dictionaries/en-vi-full.generated.jsonl \
-  --limit 20000
+npm run build:core:fvdp-only
 ```
 
-The Kaikki parser reads JSONL line by line and skips malformed lines with a warning count. It does not load the entire Kaikki dump into memory.
+FVDP + Kaikki enrichment (slower, needs kaikki-en.jsonl):
+```bash
+npm run build:core:fvdp
+```
 
-## Outputs
+Both commands write to `dictionaries/en-vi-core.generated.json` (~80 MB, gitignored).
 
-`en-vi-core.generated.json` is compact JSON for fast in-memory lookup. It includes metadata, entries keyed by lemma, capped senses/examples/terms, and prioritizes entries with Vietnamese translations.
+### Step 3 — Extract optimized active core (16,000 entries)
 
-`en-vi-full.generated.jsonl` is one lexical entry per line for IndexedDB import. It is richer and may include entries without Vietnamese translations if they still have useful definitions, pronunciation, or synonym data.
+```bash
+npm run extract:active
+```
 
-## Using Generated Core
+Selects the 16,000 most useful entries by score (short common words, must-include vocabulary, richness signals). Outputs `dictionaries/en-vi-core.16000.optimized.json` (~12 MB, gitignored).
 
-The extension currently loads `dictionaries/en-vi-core.json`. Generated core output is not used automatically. After reviewing size and quality, replace or copy `dictionaries/en-vi-core.generated.json` to `dictionaries/en-vi-core.json`.
+### Step 4 — Install active core
+
+Windows:
+```powershell
+Copy-Item ../../dictionaries/en-vi-core.16000.optimized.json ../../dictionaries/en-vi-core.json -Force
+```
+Linux/Mac:
+```bash
+cp ../../dictionaries/en-vi-core.16000.optimized.json ../../dictionaries/en-vi-core.json
+```
+
+### Step 5 — Audit Vietnamese coverage
+
+```bash
+npm run audit:vi
+```
+
+Hard fails if:
+- Fewer than 16,000 entries have Vietnamese meanings
+- "protection" is missing or has no Vietnamese meanings
+- Any required test word has empty viMeanings
+
+## Build Scripts Reference
+
+| Script | Description |
+|--------|-------------|
+| `build:core:fvdp` | FVDP + Kaikki enrichment → generated core (limit=110k) |
+| `build:core:fvdp-only` | FVDP only → generated core (limit=110k, fast) |
+| `build:full:fvdp` | FVDP + Kaikki → full JSONL for IndexedDB import |
+| `build:core` | Kaikki-only mode (legacy, weaker Vietnamese coverage) |
+| `extract:active` | Extract top 16k from generated core → optimized active |
+| `audit:vi` | Vietnamese coverage audit (hard-fail if <16k with VI) |
+| `audit:core` | General stats audit of active core |
+| `audit:vi:generated` | Vietnamese coverage audit of generated core |
+| `build:sample` | Sample build with test fixtures |
+| `download:sources` | Download sources from sources.json config |
+
+## Source Priority
+
+```
+FVDP / Ho Ngoc Duc
+  → Vietnamese meaning source of truth
+  → Provides: Vietnamese definitions, POS (Vietnamese labels), IPA pronunciation
+
+Kaikki / Wiktionary
+  → Enrichment only
+  → Provides: word forms (inflections), additional IPA, English definitions,
+               synonyms, antonyms, collocations, examples
+
+Open English WordNet
+  → Enrichment only
+  → Provides: English definitions, synonyms, antonyms
+
+CMUdict
+  → Pronunciation only
+  → Provides: ARPABET (US) pronunciation
+```
+
+A core entry is counted only if it has **at least one Vietnamese meaning** (viMeanings non-empty).
+
+## Output Format
+
+`en-vi-core.json` is compact JSON for fast in-memory lookup:
+
+```json
+{
+  "version": 1,
+  "languagePair": "en-vi",
+  "primaryViSource": "fvdp-ho-ngoc-duc",
+  "entryCount": 16000,
+  "entries": {
+    "protection": {
+      "lemma": "protection",
+      "forms": [],
+      "pos": ["noun"],
+      "pronunciations": [{ "accent": null, "ipa": "prə'tekʃn", "arpabet": null }],
+      "senses": [{
+        "pos": "danh từ",
+        "enDefinition": null,
+        "viMeanings": ["sự bảo vệ, sự bảo hộ, sự che chở; sự bảo trợ", "..."],
+        "examples": [],
+        "synonyms": [],
+        "antonyms": [],
+        "collocations": []
+      }]
+    }
+  }
+}
+```
+
+## Raw Source Policy
+
+- Source files go in `tools/dictionary-builder/sources/` (gitignored, ~3 GB+).
+- Never commit raw source dumps.
+- FVDP data is GPL. Mark derived dictionaries accordingly if distributed.
+- See `SOURCE_AUDIT.md` for full license and provenance details.
 
 ## Importing Full JSONL Later
 
-The runtime exposes developer-facing helpers:
+The runtime exposes developer-facing helpers for importing the full dictionary:
 
 ```js
 await window.LexicalDB.importJsonlText(jsonlText)
 await window.LexicalDB.importJsonlFile(file)
 ```
 
-These import entries into the `lexical-db` IndexedDB database, build a form index, and return `{ imported, skipped, errors }`. A full import UI can be added later.
-
-## License And Provenance
-
-Review each source license before generating or distributing dictionary files. Keep source metadata in generated entries. Kaikki/Wiktionary, WordNet, and CMUdict have their own licensing and attribution requirements.
+These import entries into the `lexical-db` IndexedDB database, build a form index, and return `{ imported, skipped, errors }`.

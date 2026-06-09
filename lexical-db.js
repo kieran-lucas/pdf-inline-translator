@@ -150,6 +150,16 @@ window.LexicalDB = (() => {
 
   // ── Core lookup (in-memory) ────────────────────────────────────────────────
 
+  // Returns a hit only when the entry has at least one usable Vietnamese meaning.
+  function entryHasVietnamese(entry) {
+    return (entry?.senses || []).some(s => (s.viMeanings || []).length > 0);
+  }
+
+  function makeResultIfVi(entry, source, displayText) {
+    if (!entryHasVietnamese(entry)) return { ok: false, reason: 'no-vietnamese-meaning' };
+    return makeResult(entry, source, displayText);
+  }
+
   async function lookupCore(text, options = {}) {
     if (!supportsLanguages(options.sourceLang, options.targetLang)) {
       return { ok: false, reason: 'unsupported-language' };
@@ -161,16 +171,16 @@ window.LexicalDB = (() => {
     if (!ready) return { ok: false, reason: 'disabled' };
 
     let entry = coreMap.get(key);
-    if (entry) return makeResult(entry, 'core-dictionary', displayText);
+    if (entry) return makeResultIfVi(entry, 'core-dictionary', displayText);
 
     const formLemma = coreFormMap.get(key);
     if (formLemma && coreMap.has(formLemma)) {
-      return makeResult(coreMap.get(formLemma), 'core-dictionary', displayText);
+      return makeResultIfVi(coreMap.get(formLemma), 'core-dictionary', displayText);
     }
 
     for (const candidate of safeLemmaFallback(key)) {
       entry = coreMap.get(candidate);
-      if (entry) return makeResult(entry, 'core-dictionary', displayText);
+      if (entry) return makeResultIfVi(entry, 'core-dictionary', displayText);
     }
     return { ok: false, reason: 'not-found' };
   }
@@ -224,17 +234,17 @@ window.LexicalDB = (() => {
     if (!key || !isSingleWord(key)) return { ok: false, reason: 'not-single-word' };
 
     let entry = await idbGet(STORE_ENTRIES, key);
-    if (entry) return makeResult(normalizeEntry(entry, key), 'full-dictionary', displayText);
+    if (entry) return makeResultIfVi(normalizeEntry(entry, key), 'full-dictionary', displayText);
 
     const formRecord = await idbGet(STORE_FORMS, key);
     if (formRecord?.lemma) {
       entry = await idbGet(STORE_ENTRIES, formRecord.lemma);
-      if (entry) return makeResult(normalizeEntry(entry, formRecord.lemma), 'full-dictionary', displayText);
+      if (entry) return makeResultIfVi(normalizeEntry(entry, formRecord.lemma), 'full-dictionary', displayText);
     }
 
     for (const candidate of safeLemmaFallback(key)) {
       entry = await idbGet(STORE_ENTRIES, candidate);
-      if (entry) return makeResult(normalizeEntry(entry, candidate), 'full-dictionary', displayText);
+      if (entry) return makeResultIfVi(normalizeEntry(entry, candidate), 'full-dictionary', displayText);
     }
     return { ok: false, reason: 'not-found' };
   }

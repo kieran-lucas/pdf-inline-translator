@@ -59,15 +59,46 @@ function hasUsefulContent(entry) {
   ) || (entry.pronunciations || []).length > 0;
 }
 
+const MUST_INCLUDE_LEMMAS = new Set([
+  'protection','development','environment','responsibility','education',
+  'research','science','method','result','function','variable','theorem',
+  'table','society','culture','history','language','computer','data',
+  'system','problem','student','teacher','school','university','important',
+  'different','possible','necessary','information','knowledge','government',
+  'economic','health','family','children','people','world',
+  'analysis','definition','algorithm','equation','figure','paragraph',
+  'sentence','performance','memory','graph','proof','theory','business',
+  'company','country','national','international','management','market',
+  'number','order','product','quality','service','structure','value',
+  'work','year','time','place','case','area','point','group','example',
+  'power','type','state','part','fact','program','process','section',
+  'level','field','model','network','design','paper','chapter',
+  'translation','measure','dimension','set','class','object','layer',
+]);
+
 function scoreCoreEntry(entry) {
   let score = 0;
   if (hasVietnamese(entry)) score += 1000;
-  if (/^[a-z]{2,18}$/i.test(entry.lemma)) score += 100;
-  if ((entry.pos || []).length) score += 30;
-  if ((entry.senses || []).length) score += 30;
-  if ((entry.pronunciations || []).length) score += 15;
-  if (/(study|education|research|paper|chapter|section|computer|data|system|method|result|analysis|theory)/i.test(entry.lemma)) score += 20;
-  score -= Math.max(0, (entry.lemma || '').length - 20);
+  if ((entry.source?.translation || []).includes('fvdp-ho-ngoc-duc')) score += 500;
+
+  const lemma = (entry.lemma || '');
+  const len   = lemma.length;
+
+  if (MUST_INCLUDE_LEMMAS.has(lemma)) score += 2000;
+
+  if (/^[a-z]+$/i.test(lemma)) {
+    score += Math.max(0, Math.round(200 - (len - 2) * 11.1));
+  }
+  const wordCount = lemma.split(/\s+/).length;
+  if (wordCount > 1) score -= wordCount * 100;
+  if (lemma.includes('-')) score -= 50;
+
+  const viCount = (entry.senses || []).reduce((n, s) => n + (s.viMeanings?.length || 0), 0);
+  score += Math.min(viCount, 6) * 5;
+  if ((entry.pos || []).length)            score += 15;
+  if ((entry.senses || []).length)         score += 15;
+  if ((entry.pronunciations || []).length) score += 10;
+
   return score;
 }
 
@@ -194,13 +225,14 @@ function runSingleOutput(args, allEntries, data) {
     : path.resolve(__dirname, '../../dictionaries/en-vi-core.optimized.json');
 
   const payload = {
-    version:      data.version      || 1,
-    languagePair: data.languagePair || 'en-vi',
-    generatedAt:  new Date().toISOString(),
-    entryCount:   selected.length,
-    activeCore:   true,
-    sourceFile:   path.basename(args.input || 'en-vi-core.generated.json'),
-    builderVersion: data.builderVersion || '0.2.0',
+    version:         data.version         || 1,
+    languagePair:    data.languagePair    || 'en-vi',
+    generatedAt:     new Date().toISOString(),
+    entryCount:      selected.length,
+    activeCore:      true,
+    primaryViSource: data.primaryViSource || 'unknown',
+    sourceFile:      path.basename(args.input || 'en-vi-core.generated.json'),
+    builderVersion:  data.builderVersion  || '0.2.0',
     optimizationPolicy: {
       maxSenses:         opts.maxSenses,
       maxExamples:       opts.maxExamples,

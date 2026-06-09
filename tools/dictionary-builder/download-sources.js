@@ -27,9 +27,10 @@ function readConfig(configPath) {
 
 function targetForKey(key, url) {
   const ext = path.extname(new URL(url).pathname) || '';
+  if (key === 'fvdpUrl')               return `fvdp-en-vi${ext || '.txt'}`;
   if (key === 'kaikkiEnglishJsonlUrl') return `kaikki-en${ext || '.jsonl'}`;
-  if (key === 'wordnetUrl') return `english-wordnet${ext || '.json'}`;
-  if (key === 'cmudictUrl') return `cmudict${ext || '.txt'}`;
+  if (key === 'wordnetUrl')            return `english-wordnet${ext || '.json'}`;
+  if (key === 'cmudictUrl')            return `cmudict${ext || '.txt'}`;
   return path.basename(new URL(url).pathname);
 }
 
@@ -69,14 +70,19 @@ function download(url, outPath) {
 function printManualInstructions(missing) {
   if (!missing.length) return;
   console.log('\nManual source setup:');
+  if (missing.includes('fvdpUrl')) {
+    console.log('- FVDP/Ho Ngoc Duc (PRIMARY Vietnamese source): download from');
+    console.log('    https://raw.githubusercontent.com/manhminno/English-Vietnamese-Dictionary/master/data/english-vietnamese.txt');
+    console.log('  and place it at sources/fvdp-en-vi.txt');
+  }
   if (missing.includes('kaikkiEnglishJsonlUrl')) {
-    console.log('- Kaikki/Wiktionary: download the English JSONL export from kaikki.org and place it at sources/kaikki-en.jsonl.');
+    console.log('- Kaikki/Wiktionary (enrichment): download the English JSONL export from kaikki.org and place it at sources/kaikki-en.jsonl.');
   }
   if (missing.includes('wordnetUrl')) {
-    console.log('- Open English WordNet: download a verified JSON export and place it at sources/english-wordnet.json.');
+    console.log('- Open English WordNet (enrichment): download a verified JSON export and place it at sources/english-wordnet.json.');
   }
   if (missing.includes('cmudictUrl')) {
-    console.log('- CMUdict: download the official cmudict plain text file and place it at sources/cmudict.txt.');
+    console.log('- CMUdict (pronunciation): download the official cmudict plain text file and place it at sources/cmudict.txt.');
   }
 }
 
@@ -88,7 +94,7 @@ async function main() {
   console.warn('Do not commit raw source dumps.');
   console.warn(`Source directory: ${SOURCE_DIR}`);
 
-  const keys = ['kaikkiEnglishJsonlUrl', 'wordnetUrl', 'cmudictUrl'];
+  const keys = ['fvdpUrl', 'kaikkiEnglishJsonlUrl', 'wordnetUrl', 'cmudictUrl'];
   const missing = [];
   for (const key of keys) {
     const url = String(config[key] || '').trim();
