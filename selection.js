@@ -114,20 +114,97 @@
     return null;
   }
 
-  // ── Action builder ─────────────────────────────────────────────────────────
+  // ── POS normalization ──────────────────────────────────────────────────────
+  //
+  // sense.pos from FVDP entries is raw Vietnamese ("danh từ", "tính từ", …).
+  // sense.pos from Kaikki entries is English, sometimes abbreviated ("adj", "adv").
+  // This layer maps both to canonical English keys before displaying.
+
+  const POS_ORDER = [
+    'noun', 'verb', 'adjective', 'adverb', 'auxiliary',
+    'preposition', 'conjunction', 'pronoun', 'interjection',
+    'phrase', 'idiom', 'article', 'determiner', 'numeral', 'particle',
+    'suffix', 'prefix',
+  ];
+
+  function normalizePartOfSpeech(rawPos) {
+    if (!rawPos) return null;
+    const s = rawPos.toLowerCase().trim();
+    if (!s) return null;
+
+    // Vietnamese labels from FVDP — longer compound matches before their substrings
+    if (/trợ\s*động\s*từ/.test(s)) return 'auxiliary';
+    if (/động\s*từ/.test(s))       return 'verb';
+    if (/danh\s*từ/.test(s))       return 'noun';
+    if (/tính\s*từ/.test(s))       return 'adjective';
+    if (/phó\s*từ/.test(s))        return 'adverb';
+    if (/đại\s*từ/.test(s))        return 'pronoun';
+    if (/giới\s*từ/.test(s))       return 'preposition';
+    if (/liên\s*từ/.test(s))       return 'conjunction';
+    if (/thán\s*từ/.test(s))       return 'interjection';
+    if (/mạo\s*từ/.test(s))        return 'article';
+    if (/số\s*từ/.test(s))         return 'numeral';
+    if (/\btừ\b/.test(s))          return 'particle';
+
+    // English full words (Kaikki / already-normalized data)
+    const EN_FULL = {
+      noun: 'noun', verb: 'verb', adjective: 'adjective', adverb: 'adverb',
+      pronoun: 'pronoun', preposition: 'preposition', conjunction: 'conjunction',
+      interjection: 'interjection', article: 'article', auxiliary: 'auxiliary',
+      numeral: 'numeral', particle: 'particle', phrase: 'phrase', idiom: 'idiom',
+      determiner: 'determiner', suffix: 'suffix', prefix: 'prefix',
+    };
+    if (EN_FULL[s]) return EN_FULL[s];
+
+    // English abbreviations as used in Kaikki/Wiktionary dump data
+    if (s === 'n'    || s === 'n.')    return 'noun';
+    if (s === 'v'    || s === 'v.')    return 'verb';
+    if (s === 'adj'  || s === 'adj.')  return 'adjective';
+    if (s === 'adv'  || s === 'adv.')  return 'adverb';
+    if (s === 'prep' || s === 'prep.') return 'preposition';
+    if (s === 'pron' || s === 'pron.') return 'pronoun';
+    if (s === 'conj' || s === 'conj.') return 'conjunction';
+    if (s === 'int'  || s === 'int.'  ||
+        s === 'interj' || s === 'interj.' ||
+        s === 'intj'   || s === 'intj.')   return 'interjection';
+    if (s === 'art'  || s === 'art.')  return 'article';
+    if (s === 'aux'  || s === 'aux.')  return 'auxiliary';
+    if (s === 'num'  || s === 'num.')  return 'numeral';
+    if (s === 'det'  || s === 'det.')  return 'determiner';
+
+    // Unknown — return null so caller can display the raw value as a fallback
+    return null;
+  }
+
+  // ── Action builder ──────────────────────────────────────────────────────────
 
   function groupSensesByPos(senses) {
     const groups = [];
     const indexMap = new Map();
     for (const sense of senses || []) {
-      const key = sense.pos || '';
+      const canonical = normalizePartOfSpeech(sense.pos);
+      // Group key: canonical key when known, raw string otherwise (preserves distinct unknowns)
+      const key = canonical !== null ? canonical : (sense.pos || '');
       if (indexMap.has(key)) {
         groups[indexMap.get(key)].senses.push(sense);
       } else {
         indexMap.set(key, groups.length);
-        groups.push({ pos: key, senses: [sense] });
+        groups.push({
+          canonical,
+          // displayPos: English label for known POS; raw value for unknown; null if empty
+          displayPos: canonical !== null ? canonical : (sense.pos || null),
+          senses: [sense],
+        });
       }
     }
+    // Sort by canonical POS order; unknown/unnamed groups go last
+    groups.sort((a, b) => {
+      const ai = a.canonical !== null ? POS_ORDER.indexOf(a.canonical) : -1;
+      const bi = b.canonical !== null ? POS_ORDER.indexOf(b.canonical) : -1;
+      const av = ai === -1 ? Infinity : ai;
+      const bv = bi === -1 ? Infinity : bi;
+      return av - bv;
+    });
     return groups;
   }
 
@@ -264,12 +341,12 @@
         const section = document.createElement('div');
         section.className = 'tx-vc-section';
 
-        if (g.pos) {
+        if (g.displayPos) {
           const posLabel = document.createElement('div');
           posLabel.className   = 'tx-vc-pos-label';
-          posLabel.textContent = g.pos;
+          posLabel.textContent = g.displayPos;
           section.appendChild(posLabel);
-          namedSections.push({ pos: g.pos, section });
+          namedSections.push({ pos: g.displayPos, section });
         }
 
         const allMeanings = [];
