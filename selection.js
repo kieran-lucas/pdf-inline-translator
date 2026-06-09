@@ -23,13 +23,13 @@
   txPopup.setAttribute('aria-label', 'Translation');
   txPopup.innerHTML =
     '<div class="tx-head">' +
-      '<span class="tx-source-text"></span>' +
+      '<span class="tx-headword"></span>' +
       '<button class="tx-close-btn" aria-label="Close">&#x2715;</button>' +
     '</div>' +
     '<div class="tx-body"></div>';
   document.body.appendChild(txPopup);
 
-  const txSourceText = txPopup.querySelector('.tx-source-text');
+  const txHeadword = txPopup.querySelector('.tx-headword');
   const txCloseBtn   = txPopup.querySelector('.tx-close-btn');
   const txBody       = txPopup.querySelector('.tx-body');
 
@@ -114,99 +114,30 @@
     return null;
   }
 
-  // Build the expandable senses section (hidden by default).
-  function makeLexicalExpanded(entry) {
-    const wrap = document.createElement('div');
-    wrap.className = 'tx-expanded tx-hidden';
-
-    for (const sense of entry?.senses || []) {
-      const block = document.createElement('div');
-      block.className = 'tx-sense';
-
-      const heading = document.createElement('div');
-      heading.className = 'tx-sense-heading';
-      const parts = [sense.pos, ...(sense.viMeanings || []).slice(0, 3)].filter(Boolean);
-      heading.textContent = parts.join(' · ');
-      block.appendChild(heading);
-
-      if (sense.enDefinition) {
-        const def = document.createElement('p');
-        def.className   = 'tx-sense-def';
-        def.textContent = sense.enDefinition;
-        block.appendChild(def);
-      }
-
-      for (const ex of (sense.examples || []).slice(0, 1)) {
-        const p = document.createElement('p');
-        p.className   = 'tx-sense-example';
-        p.textContent = ex.vi ? `“${ex.en}” → ${ex.vi}` : `“${ex.en}”`;
-        block.appendChild(p);
-      }
-
-      const lists = [
-        ['Synonyms', sense.synonyms],
-        ['Antonyms', sense.antonyms],
-        ['Collocations', sense.collocations],
-      ];
-      for (const [label, values] of lists) {
-        const clean = (values || []).filter(Boolean);
-        if (!clean.length) continue;
-        const p = document.createElement('p');
-        p.className   = 'tx-sense-row';
-        p.textContent = `${label}: ${clean.join(', ')}`;
-        block.appendChild(p);
-      }
-
-      if (block.childElementCount > 0) wrap.appendChild(block);
-    }
-
-    return wrap;
-  }
-
   // ── Action builder ─────────────────────────────────────────────────────────
 
-  function appendActions(container, translated, sourceText, result, wordForSave, expanded) {
-    const actions = document.createElement('div');
-    actions.className = 'tx-actions';
+  function groupSensesByPos(senses) {
+    const groups = [];
+    const indexMap = new Map();
+    for (const sense of senses || []) {
+      const key = sense.pos || '';
+      if (indexMap.has(key)) {
+        groups[indexMap.get(key)].senses.push(sense);
+      } else {
+        indexMap.set(key, groups.length);
+        groups.push({ pos: key, senses: [sense] });
+      }
+    }
+    return groups;
+  }
 
-    // Copy translation
-    const copyBtn = document.createElement('button');
-    copyBtn.className   = 'tx-action-btn tx-copy-btn';
-    copyBtn.textContent = 'Copy';
-    copyBtn.title = 'Copy translation';
-    copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(translated).then(() => {
-        copyBtn.textContent = 'Copied!';
-        copyBtn.classList.add('tx-copy-btn--done');
-        setTimeout(() => {
-          if (copyBtn.isConnected) {
-            copyBtn.textContent = 'Copy';
-            copyBtn.classList.remove('tx-copy-btn--done');
-          }
-        }, 1500);
-      }).catch(() => {});
-    });
-    actions.appendChild(copyBtn);
+  function renderFooterActions(container, translated, sourceText, result, wordForSave) {
+    const footer = document.createElement('div');
+    footer.className = 'tx-vc-footer';
 
-    // Copy source
-    const copySourceBtn = document.createElement('button');
-    copySourceBtn.className   = 'tx-action-btn tx-copy-source-btn';
-    copySourceBtn.textContent = 'Copy source';
-    copySourceBtn.title = 'Copy original text';
-    copySourceBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(sourceText).then(() => {
-        copySourceBtn.textContent = 'Copied!';
-        setTimeout(() => {
-          if (copySourceBtn.isConnected) copySourceBtn.textContent = 'Copy source';
-        }, 1500);
-      }).catch(() => {});
-    });
-    actions.appendChild(copySourceBtn);
-
-    // Speak (Web Speech API)
     if ('speechSynthesis' in window) {
       const speakBtn = document.createElement('button');
-      speakBtn.className   = 'tx-action-btn tx-speak-btn';
+      speakBtn.className   = 'tx-vc-btn';
       speakBtn.textContent = '🔊 Speak';
       speakBtn.title = 'Pronounce in English';
       speakBtn.addEventListener('click', () => {
@@ -216,12 +147,11 @@
         utt.rate = 0.85;
         window.speechSynthesis.speak(utt);
       });
-      actions.appendChild(speakBtn);
+      footer.appendChild(speakBtn);
     }
 
-    // Save word
     const saveBtn = document.createElement('button');
-    saveBtn.className   = 'tx-action-btn tx-save-btn';
+    saveBtn.className   = 'tx-vc-btn tx-vc-save-btn';
     saveBtn.textContent = '☆ Save';
     saveBtn.title = 'Save to word list';
     const SAVED_KEY = 'saved_words';
@@ -231,7 +161,7 @@
         const words = data[SAVED_KEY] || [];
         const saved = words.some(w => w.word === wordForSave);
         saveBtn.textContent = saved ? '★ Saved' : '☆ Save';
-        saveBtn.classList.toggle('tx-save-btn--saved', saved);
+        saveBtn.classList.toggle('tx-vc-save-btn--saved', saved);
       });
     }
     refreshSaveState();
@@ -253,54 +183,56 @@
         chrome.storage.local.set({ [SAVED_KEY]: words }, refreshSaveState);
       });
     });
-    actions.appendChild(saveBtn);
+    footer.appendChild(saveBtn);
 
-    // More / Less (only when expanded section has content)
-    if (expanded && expanded.childElementCount) {
-      const moreBtn = document.createElement('button');
-      moreBtn.className   = 'tx-action-btn tx-more-btn';
-      moreBtn.textContent = 'More ▸';
-      moreBtn.addEventListener('click', () => {
-        const hidden = expanded.classList.toggle('tx-hidden');
-        moreBtn.textContent = hidden ? 'More ▸' : 'Less ▾';
-        if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
-      });
-      actions.appendChild(moreBtn);
-    }
+    const moreBtn = document.createElement('button');
+    moreBtn.className   = 'tx-vc-btn tx-vc-more-btn';
+    moreBtn.textContent = 'More ▸';
 
-    // Ask Gemini — shown when result came from offline dictionary
+    const morePanel = document.createElement('div');
+    morePanel.className = 'tx-vc-more-panel tx-hidden';
+
+    const copyItem = document.createElement('button');
+    copyItem.className   = 'tx-vc-more-item';
+    copyItem.textContent = 'Copy translation';
+    copyItem.addEventListener('click', () => {
+      navigator.clipboard.writeText(translated).then(() => {
+        copyItem.textContent = 'Copied!';
+        copyItem.classList.add('tx-vc-more-item--done');
+        setTimeout(() => {
+          if (copyItem.isConnected) {
+            copyItem.textContent = 'Copy translation';
+            copyItem.classList.remove('tx-vc-more-item--done');
+          }
+        }, 1500);
+      }).catch(() => {});
+    });
+    morePanel.appendChild(copyItem);
+
     const isDictSource = result.fromCache === 'dictionary' ||
       (result.source && result.source !== 'gemini' && result.source !== 'idb' && result.source !== 'memory');
     if (isDictSource) {
-      const geminiBtn = document.createElement('button');
-      geminiBtn.className   = 'tx-action-btn tx-retry-btn';
-      geminiBtn.textContent = 'Ask Gemini';
-      geminiBtn.title = 'Get AI translation from Gemini';
-      geminiBtn.addEventListener('click', () => {
+      const geminiItem = document.createElement('button');
+      geminiItem.className   = 'tx-vc-more-item';
+      geminiItem.textContent = 'Ask Gemini';
+      geminiItem.title = 'Get AI translation from Gemini';
+      geminiItem.addEventListener('click', () => {
         if (!openRect) return;
-        geminiBtn.disabled = true;
+        geminiItem.disabled = true;
         openPopup(sourceText, openRect, { forceGemini: true });
       });
-      actions.appendChild(geminiBtn);
+      morePanel.appendChild(geminiItem);
     }
 
-    // Open Settings
-    const settingsBtn = document.createElement('button');
-    settingsBtn.className   = 'tx-action-btn tx-open-settings-btn';
-    settingsBtn.textContent = '⚙ Settings';
-    settingsBtn.addEventListener('click', openSettings);
-    actions.appendChild(settingsBtn);
+    moreBtn.addEventListener('click', () => {
+      const hidden = morePanel.classList.toggle('tx-hidden');
+      moreBtn.textContent = hidden ? 'More ▸' : 'More ▾';
+      if (openRect && !txPopup.classList.contains('tx-hidden')) rePlace(txPopup, openRect);
+    });
 
-    container.appendChild(actions);
-  }
-
-  function openSettings() {
-    hideAll();
-    const settingsPanel  = document.getElementById('settings-panel');
-    const settingsToggle = document.getElementById('settings-toggle');
-    if (settingsToggle && settingsPanel && !settingsPanel.classList.contains('settings-open')) {
-      settingsToggle.click();
-    }
+    footer.appendChild(moreBtn);
+    footer.appendChild(morePanel);
+    container.appendChild(footer);
   }
 
   // ── Result body ────────────────────────────────────────────────────────────
@@ -311,80 +243,102 @@
 
     if (result.entry) {
       const entry = result.entry;
-
-      // Lemma + IPA
-      const lemmaRow = document.createElement('div');
-      lemmaRow.className = 'tx-lemma-row';
-
-      const lemmaEl = document.createElement('span');
-      lemmaEl.className   = 'tx-lemma';
-      lemmaEl.textContent = entry.lemma || sourceText;
-      lemmaRow.appendChild(lemmaEl);
+      txHeadword.textContent = entry.lemma || sourceText;
 
       const pron = firstPronunciation(entry);
       if (pron?.ipa) {
-        const ipaEl = document.createElement('span');
-        ipaEl.className   = 'tx-ipa';
-        ipaEl.textContent = pron.ipa;
-        lemmaRow.appendChild(ipaEl);
+        const pronEl = document.createElement('div');
+        pronEl.className   = 'tx-vc-pronun';
+        pronEl.textContent = pron.ipa;
+        txBody.appendChild(pronEl);
       }
-      txBody.appendChild(lemmaRow);
 
-      // POS badges + source badge
-      const hasPOS    = (entry.pos || []).length > 0;
-      const srcLabel  = sourceBadgeLabel(result.source);
-      if (hasPOS || srcLabel) {
-        const badgeRow = document.createElement('div');
-        badgeRow.className = 'tx-badge-row';
-        for (const pos of (entry.pos || []).slice(0, 4)) {
-          const badge = document.createElement('span');
-          badge.className   = 'tx-pos-badge';
-          badge.textContent = pos;
-          badgeRow.appendChild(badge);
+      const groups = groupSensesByPos(entry.senses);
+
+      // Build sections first so tab handlers can close over their section elements
+      const sectionsEl = document.createElement('div');
+      sectionsEl.className = 'tx-vc-sections';
+      const namedSections = [];
+
+      for (const g of groups) {
+        const section = document.createElement('div');
+        section.className = 'tx-vc-section';
+
+        if (g.pos) {
+          const posLabel = document.createElement('div');
+          posLabel.className   = 'tx-vc-pos-label';
+          posLabel.textContent = g.pos;
+          section.appendChild(posLabel);
+          namedSections.push({ pos: g.pos, section });
         }
-        if (srcLabel) {
-          const srcBadge = document.createElement('span');
-          srcBadge.className   = 'tx-source-badge';
-          srcBadge.textContent = srcLabel;
-          badgeRow.appendChild(srcBadge);
+
+        const allMeanings = [];
+        for (const s of g.senses) {
+          for (const m of (s.viMeanings || [])) {
+            if (m) allMeanings.push(m);
+            if (allMeanings.length >= 5) break;
+          }
+          if (allMeanings.length >= 5) break;
         }
-        txBody.appendChild(badgeRow);
+
+        if (allMeanings.length) {
+          const ol = document.createElement('ol');
+          ol.className = 'tx-vc-ol';
+          for (const m of allMeanings) {
+            const li = document.createElement('li');
+            li.textContent = m;
+            ol.appendChild(li);
+          }
+          section.appendChild(ol);
+        }
+
+        const firstColls = g.senses.find(s => (s.collocations || []).length > 0);
+        const firstEx    = g.senses.find(s => (s.examples    || []).length > 0);
+        const usageText  = firstColls?.collocations?.[0] || firstEx?.examples?.[0]?.en || null;
+        if (usageText) {
+          const usageEl = document.createElement('div');
+          usageEl.className   = 'tx-vc-usage';
+          usageEl.textContent = usageText;
+          section.appendChild(usageEl);
+        }
+
+        if (section.childElementCount > 0) sectionsEl.appendChild(section);
       }
 
-      // Vietnamese meaning (prominent)
-      if (translated) {
-        const viEl = document.createElement('p');
-        viEl.className   = 'tx-vi-meaning';
-        viEl.textContent = translated;
-        txBody.appendChild(viEl);
+      if (namedSections.length >= 2) {
+        const tabsEl = document.createElement('div');
+        tabsEl.className = 'tx-vc-tabs';
+        for (const { pos, section } of namedSections) {
+          const tab = document.createElement('button');
+          tab.className   = 'tx-vc-tab';
+          tab.textContent = pos;
+          tab.addEventListener('click', () => {
+            section.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          });
+          tabsEl.appendChild(tab);
+        }
+        txBody.appendChild(tabsEl);
       }
 
-      // English definition from first sense that has one
-      const firstDef = (entry.senses || []).find(s => s.enDefinition)?.enDefinition;
-      if (firstDef) {
-        const defEl = document.createElement('p');
-        defEl.className   = 'tx-en-def';
-        defEl.textContent = firstDef;
-        txBody.appendChild(defEl);
+      if (sectionsEl.childElementCount > 0) {
+        txBody.appendChild(sectionsEl);
+      } else if (translated) {
+        const p = document.createElement('p');
+        p.className = 'tx-result-text';
+        p.textContent = translated;
+        txBody.appendChild(p);
       }
 
-      // Expandable senses
-      const expanded = makeLexicalExpanded(entry);
-      if (expanded.childElementCount) {
-        txBody.appendChild(expanded);
-      }
-
-      appendActions(txBody, translated, sourceText, result, entry.lemma || sourceText,
-        expanded.childElementCount ? expanded : null);
+      renderFooterActions(txBody, translated, sourceText, result, entry.lemma || sourceText);
 
     } else {
       // Simple Gemini result
       const p = document.createElement('p');
-      p.className   = 'tx-result-text';
+      p.className = 'tx-result-text';
       p.textContent = translated;
       txBody.appendChild(p);
 
-      appendActions(txBody, translated, sourceText, result, sourceText, null);
+      renderFooterActions(txBody, translated, sourceText, result, sourceText);
     }
   }
 
@@ -403,44 +357,42 @@
     txBody.innerHTML = '';
 
     const msg = document.createElement('p');
-    msg.className   = 'tx-error-text';
+    msg.className = 'tx-error-text';
 
     if (errorType === 'no-key') {
-      msg.textContent = 'No Gemini API key configured. Add your key in Settings.';
+      msg.textContent = 'No Gemini API key. Open Settings (⚙) to add your key.';
     } else {
       msg.textContent = errorMsg || 'Translation failed.';
     }
     txBody.appendChild(msg);
 
-    const actions = document.createElement('div');
-    actions.className = 'tx-actions';
+    const hasRetry   = errorType !== 'no-key' && errorType !== 'offline-miss' && retryFn;
+    const hasGemini  = errorType === 'offline-miss';
+    if (hasRetry || hasGemini) {
+      const actions = document.createElement('div');
+      actions.className = 'tx-vc-footer';
 
-    if (errorType !== 'no-key' && errorType !== 'offline-miss' && retryFn) {
-      const retryBtn = document.createElement('button');
-      retryBtn.className   = 'tx-action-btn tx-retry-btn';
-      retryBtn.textContent = 'Retry';
-      retryBtn.addEventListener('click', retryFn);
-      actions.appendChild(retryBtn);
+      if (hasRetry) {
+        const retryBtn = document.createElement('button');
+        retryBtn.className   = 'tx-vc-btn';
+        retryBtn.textContent = 'Retry';
+        retryBtn.addEventListener('click', retryFn);
+        actions.appendChild(retryBtn);
+      }
+
+      if (hasGemini) {
+        const geminiBtn = document.createElement('button');
+        geminiBtn.className   = 'tx-vc-btn';
+        geminiBtn.textContent = 'Ask Gemini';
+        geminiBtn.title = 'Try Gemini API translation';
+        geminiBtn.addEventListener('click', () => {
+          if (openRect) openPopup(sourceText, openRect, { forceGemini: true });
+        });
+        actions.appendChild(geminiBtn);
+      }
+
+      txBody.appendChild(actions);
     }
-
-    if (errorType === 'offline-miss') {
-      const geminiBtn = document.createElement('button');
-      geminiBtn.className   = 'tx-action-btn tx-retry-btn';
-      geminiBtn.textContent = 'Ask Gemini';
-      geminiBtn.title = 'Try Gemini API translation';
-      geminiBtn.addEventListener('click', () => {
-        if (openRect) openPopup(sourceText, openRect, { forceGemini: true });
-      });
-      actions.appendChild(geminiBtn);
-    }
-
-    const settingsBtn = document.createElement('button');
-    settingsBtn.className   = 'tx-action-btn tx-open-settings-btn';
-    settingsBtn.textContent = '⚙ Settings';
-    settingsBtn.addEventListener('click', openSettings);
-    actions.appendChild(settingsBtn);
-
-    txBody.appendChild(actions);
   }
 
   // ── Selection helper ───────────────────────────────────────────────────────
@@ -517,7 +469,7 @@
     const preview = text.length > MAX_PREVIEW
       ? text.slice(0, MAX_PREVIEW).trimEnd() + '…'
       : text;
-    txSourceText.textContent = preview;
+    txHeadword.textContent = preview;
 
     const normalized = text.replace(/\s+/g, ' ').trim();
     if (normalized.length > window.Translator.MAX_CHARS) {
