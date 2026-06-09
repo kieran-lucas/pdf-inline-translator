@@ -214,21 +214,6 @@
     const footer = document.createElement('div');
     footer.className = 'tx-vc-footer';
 
-    if ('speechSynthesis' in window) {
-      const speakBtn = document.createElement('button');
-      speakBtn.className   = 'tx-vc-btn';
-      speakBtn.textContent = '🔊 Speak';
-      speakBtn.title = 'Pronounce in English';
-      speakBtn.addEventListener('click', () => {
-        window.speechSynthesis.cancel();
-        const utt = new SpeechSynthesisUtterance(sourceText);
-        utt.lang = 'en-US';
-        utt.rate = 0.85;
-        window.speechSynthesis.speak(utt);
-      });
-      footer.appendChild(speakBtn);
-    }
-
     const saveBtn = document.createElement('button');
     saveBtn.className   = 'tx-vc-btn tx-vc-save-btn';
     saveBtn.textContent = '☆ Save';
@@ -425,6 +410,7 @@
 
     } else {
       // Simple Gemini result
+      wireHeaderSpeaker(sourceText);
       const p = document.createElement('p');
       p.className = 'tx-result-text';
       p.textContent = translated;
@@ -562,6 +548,8 @@
       ? text.slice(0, MAX_PREVIEW).trimEnd() + '…'
       : text;
     txHeadword.textContent = preview;
+    txSpeakBtn.classList.add('tx-hidden');
+    txSpeakBtn.onclick = null;
 
     const normalized = text.replace(/\s+/g, ' ').trim();
     if (normalized.length > window.Translator.MAX_CHARS) {
