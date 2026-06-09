@@ -24,14 +24,16 @@
   txPopup.innerHTML =
     '<div class="tx-head">' +
       '<span class="tx-headword"></span>' +
+      '<button class="tx-head-speak-btn tx-hidden" aria-label="Speak word aloud">🔊</button>' +
       '<button class="tx-close-btn" aria-label="Close">&#x2715;</button>' +
     '</div>' +
     '<div class="tx-body"></div>';
   document.body.appendChild(txPopup);
 
-  const txHeadword = txPopup.querySelector('.tx-headword');
-  const txCloseBtn   = txPopup.querySelector('.tx-close-btn');
-  const txBody       = txPopup.querySelector('.tx-body');
+  const txHeadword  = txPopup.querySelector('.tx-headword');
+  const txSpeakBtn  = txPopup.querySelector('.tx-head-speak-btn');
+  const txCloseBtn  = txPopup.querySelector('.tx-close-btn');
+  const txBody      = txPopup.querySelector('.tx-body');
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -314,6 +316,18 @@
 
   // ── Result body ────────────────────────────────────────────────────────────
 
+  function wireHeaderSpeaker(text) {
+    if (!('speechSynthesis' in window)) return;
+    txSpeakBtn.classList.remove('tx-hidden');
+    txSpeakBtn.onclick = () => {
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.lang = 'en-US';
+      utt.rate = 0.85;
+      window.speechSynthesis.speak(utt);
+    };
+  }
+
   function setBodyResult(result, sourceText) {
     txBody.innerHTML = '';
     const translated = result.translated;
@@ -321,6 +335,7 @@
     if (result.entry) {
       const entry = result.entry;
       txHeadword.textContent = entry.lemma || sourceText;
+      wireHeaderSpeaker(sourceText);
 
       const pron = firstPronunciation(entry);
       if (pron?.ipa) {
