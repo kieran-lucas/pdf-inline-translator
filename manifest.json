@@ -22,7 +22,11 @@
 
   "web_accessible_resources": [
     {
-      "resources": ["lib/pdf.worker.min.js"],
+      "resources": [
+        "lib/pdf.worker.min.js",
+        "lib/cmaps/*",
+        "lib/standard_fonts/*"
+      ],
       "matches": ["<all_urls>"]
     }
   ],

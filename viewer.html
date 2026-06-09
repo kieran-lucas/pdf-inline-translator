@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Reader</title>
   <link rel="icon" href="icons/icon48.png" type="image/png">
+  <link rel="stylesheet" href="lib/pdf_viewer.css">
   <link rel="stylesheet" href="viewer.css">
 </head>
 <body>
@@ -154,7 +155,13 @@
   <div id="error-bar" class="hidden" role="alert" aria-live="assertive"></div>
   <div id="loading-bar" class="hidden" aria-live="polite">Loading PDF…</div>
 
-  <div id="pdf-container"></div>
+  <div id="viewer-body">
+    <nav id="outline-panel" class="hidden" aria-label="Table of contents">
+      <div class="outline-header">Contents</div>
+      <ul id="outline-list"></ul>
+    </nav>
+    <div id="pdf-container"></div>
+  </div>
 
   <script src="lib/pdf.min.js"></script>
   <script src="viewer.js"></script>

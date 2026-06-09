@@ -185,9 +185,85 @@ body {
   font-size: 13px;
 }
 
+/* ── Viewer body (sidebar + pages) ───────────────────────────────────────── */
+
+#viewer-body {
+  display: flex;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+/* ── Outline sidebar (TOC) ────────────────────────────────────────────────── */
+
+#outline-panel {
+  position: sticky;
+  top: 0;
+  width: 240px;
+  flex-shrink: 0;
+  height: 100vh;
+  overflow-y: auto;
+  background: #1a1a1a;
+  border-right: 1px solid #2d2d2d;
+  padding: 12px 0;
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+#outline-panel.hidden {
+  display: none;
+}
+
+.outline-header {
+  padding: 0 14px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #64748b;
+  border-bottom: 1px solid #2d2d2d;
+  margin-bottom: 6px;
+}
+
+#outline-list,
+#outline-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#outline-list ul {
+  padding-left: 12px;
+}
+
+.outline-item {
+  display: block;
+  width: 100%;
+  padding: 4px 14px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #c8cdd4;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 3px;
+  transition: background 0.1s, color 0.1s;
+}
+
+.outline-item:hover {
+  background: #2d3748;
+  color: #e2e8f0;
+}
+
 /* ── PDF pages container ──────────────────────────────────────────────────── */
 
 #pdf-container {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -215,72 +291,19 @@ body {
   display: block;
 }
 
-/* ── Text layer (geometry anchor, visually invisible) ─────────────────────── */
+/* ── Text layer ───────────────────────────────────────────────────────────── */
 /*
- * ENABLE_DOM_TEXT_LAYER = false (viewer.js): renderTextLayer is skipped, so
- * this div stays empty. The geometry word index is still built from
- * getTextContent() for double-click detection and custom highlights.
- *
- * If ENABLE_DOM_TEXT_LAYER is ever re-enabled, the hardened rules below
- * guarantee spans cannot visually corrupt the PDF canvas rendering.
+ * The DOM text layer is not rendered (see viewer.js).  The official text layer
+ * CSS from lib/pdf_viewer.css governs any spans that are ever injected.
+ * Our only override: reset the Lexend font-family so PDF text metrics match
+ * the PDF's own font metrics and not our UI font.
  */
 
 .textLayer {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  opacity: 1;
-  line-height: 1;
-  text-size-adjust: none;
-  -webkit-text-size-adjust: none;
   font-family: initial;
-  transform-origin: 0 0;
-  pointer-events: auto;
-  z-index: 2;
 }
 
-.textLayer span,
-.textLayer br {
-  /* Fully invisible — must never draw readable text over the canvas. */
-  color: transparent !important;
-  background: transparent !important;
-  text-shadow: none !important;
-  opacity: 1;
-
-  position: absolute;
-  transform-origin: 0% 0%;
-  user-select: text;
-  cursor: text;
-  display: inline !important;
-
-  /* Prevent any inherited global style from causing vertical/wrapped rendering. */
-  white-space: pre !important;
-  word-break: normal !important;
-  overflow-wrap: normal !important;
-  writing-mode: horizontal-tb !important;
-  text-orientation: mixed !important;
-
-  /* Isolate from Lexend and any other app font metrics. */
-  font-family: sans-serif !important;
-  letter-spacing: normal !important;
-  text-transform: none !important;
-}
-
-.textLayer .endOfContent {
-  display: block;
-  position: absolute;
-  inset: 100% 0 0;
-  z-index: -1;
-  cursor: default;
-  user-select: none;
-}
-
-.textLayer .endOfContent.active {
-  top: 0;
-}
-
+/* Keep text selection highlight in our brand blue when text layer is on. */
 .textLayer ::selection {
   background: rgba(37, 99, 235, 0.28);
   color: transparent;
@@ -307,6 +330,29 @@ body {
   box-sizing: border-box;
   border: 1px solid rgba(220, 38, 38, 0.75);
   background: rgba(220, 38, 38, 0.06);
+}
+
+/* ── Annotation layer ─────────────────────────────────────────────────────── */
+/*
+ * Official pdf_viewer.css defines .annotationLayer styling (position, z-index)
+ * but assumes it lives inside .pdfViewer .page. Our .pdf-page context is close
+ * enough — just ensure our .annotationLink divs are clickable and positioned.
+ */
+
+.annotationLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.annotationLink {
+  position: absolute;
+  cursor: pointer;
+  pointer-events: auto;
+  /* Transparent fill so it's invisible but still intercepts mouse events. */
+  background: transparent;
+  /* Uncomment for debug:  background: rgba(0, 120, 255, 0.12); */
 }
 
 /* ── Translation UI ───────────────────────────────────────────────────────── */

@@ -16,14 +16,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.m
 const DEBUG_RENDER = false;
 const DEBUG_TEXT_GEOMETRY = false;
 
-// When false, renderTextLayer() is skipped entirely so no DOM text spans are
-// injected over the canvas. The geometry word index (buildTextGeometryIndex)
-// still runs from getTextContent(), so double-click detection and custom
-// highlights are fully preserved. Native drag-to-select is disabled.
-// Set true only if you need browser-native text selection; be aware that
-// mis-styled text spans can corrupt the visual PDF rendering.
-const ENABLE_DOM_TEXT_LAYER = false;
-console.log('[pdf-viewer] DOM text layer enabled:', ENABLE_DOM_TEXT_LAYER);
+// PDF.js font resources — must match the version of pdf.min.js.
+// CMap files are required for PDFs that use CMap-based font encodings (CJK, Symbol,
+// ZapfDingbats, older Type1 fonts).  Without them, PDF.js can't decode character
+// codes and assigns wrong advance widths, producing vertical letter stacking.
+// Standard font data provides correct metrics for the 14 standard Type1 fonts
+// (Times, Helvetica, Courier, Symbol, ZapfDingbats) that PDFs are allowed to omit.
+const CMAP_URL            = chrome.runtime.getURL('lib/cmaps/');
+const STANDARD_FONT_URL   = chrome.runtime.getURL('lib/standard_fonts/');
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -34,6 +34,8 @@ const zoomSelect   = document.getElementById('zoom-select');
 const errorBar     = document.getElementById('error-bar');
 const loadingBar   = document.getElementById('loading-bar');
 const pdfContainer = document.getElementById('pdf-container');
+const outlinePanel = document.getElementById('outline-panel');
+const outlineList  = document.getElementById('outline-list');
 
 // ── Global state ───────────────────────────────────────────────────────────
 
@@ -44,14 +46,15 @@ let currentZoom        = parseFloat(zoomSelect.value); // default 1.5
 
 // Per-page slot array. slots[0] is unused; slots[1..n] mirror PDF pages.
 // Each slot:
-//   pageDiv         – always in DOM; sized to match page at current zoom
-//   canvas          – null until first render; reused across zoom changes
-//   textLayerDiv    – inside pageDiv, cleared and repopulated each render
-//   naturalW/H      – page size (px) at scale 1.0, cached for instant resize
-//   state           – 'idle' | 'rendering' | 'rendered' | 'error'
-//   activeGeneration – generation of the in-progress or last-completed render
-//   renderedZoom    – zoom used for the completed render (null if never rendered)
-//   activeRenderTask – live PDF.js RenderTask; cancelled on zoom/load change
+//   pageDiv           – always in DOM; sized to match page at current zoom
+//   canvas            – null until first render; reused across zoom changes
+//   textLayerDiv      – inside pageDiv; empty (text layer disabled for canvas fidelity)
+//   annotationLayerDiv – inside pageDiv; holds clickable link overlays
+//   naturalW/H        – page size (px) at scale 1.0, cached for instant resize
+//   state             – 'idle' | 'rendering' | 'rendered' | 'error'
+//   activeGeneration  – generation of the in-progress or last-completed render
+//   renderedZoom      – zoom used for the completed render (null if never rendered)
+//   activeRenderTask  – live PDF.js RenderTask; cancelled on zoom/load change
 const slots = [];
 
 // The single IntersectionObserver; replaced whenever a new document loads.
@@ -80,37 +83,46 @@ function createSlot(pageNum, naturalW, naturalH) {
   const pageDiv = document.createElement('div');
   pageDiv.className      = 'pdf-page';
   pageDiv.dataset.page   = String(pageNum);
-  // Round to integer CSS pixels: avoids sub-pixel gaps between pageDiv,
-  // canvas, and the text layer (which uses CSS round() with --scale-factor).
   pageDiv.style.width    = Math.round(naturalW * currentZoom) + 'px';
   pageDiv.style.height   = Math.round(naturalH * currentZoom) + 'px';
 
+  // textLayerDiv is kept but empty — DOM text layer is not rendered because it
+  // interferes with canvas fidelity.  Geometry-based word detection drives
+  // double-click translation without injecting any visible DOM spans.
   const textLayerDiv = document.createElement('div');
   textLayerDiv.className = 'textLayer';
+  textLayerDiv.setAttribute('aria-hidden', 'true');
   pageDiv.appendChild(textLayerDiv);
 
+  // Annotation layer sits above the canvas for clickable link overlays.
+  const annotationLayerDiv = document.createElement('div');
+  annotationLayerDiv.className = 'annotationLayer';
+  pageDiv.appendChild(annotationLayerDiv);
+
   if (DEBUG_RENDER) {
-    pageDiv.style.outline      = '2px solid red';
-    textLayerDiv.style.outline = '2px solid blue';
+    pageDiv.style.outline              = '2px solid red';
+    textLayerDiv.style.outline         = '2px solid blue';
+    annotationLayerDiv.style.outline   = '2px solid orange';
   }
 
   return {
     pageNum,
     pageDiv,
-    canvas:           null,
+    canvas:              null,
     textLayerDiv,
-    textContentItems: [],
-    wordBoxes:        [],
+    annotationLayerDiv,
+    textContentItems:    [],
+    wordBoxes:           [],
     textGeometryGeneration: -1,
-    textGeometryZoom: null,
-    geometryHighlight: null,
-    geometryDebugLayer: null,
+    textGeometryZoom:    null,
+    geometryHighlight:   null,
+    geometryDebugLayer:  null,
     naturalW,
     naturalH,
-    state:            'idle',
-    activeGeneration: -1,
-    renderedZoom:     null,
-    activeRenderTask: null,
+    state:               'idle',
+    activeGeneration:    -1,
+    renderedZoom:        null,
+    activeRenderTask:    null,
   };
 }
 
@@ -258,19 +270,18 @@ function isCancelError(err) {
 }
 
 // ── renderPageIntoSlot ─────────────────────────────────────────────────────
-// Renders the canvas at full device resolution then builds the text layer.
+// Renders the canvas at full device resolution, builds the geometry word index
+// for translation hit-testing, and populates the annotation link overlay.
 //
 // Canvas sizing:
 //   Physical canvas pixels = round(viewport CSS px * DPR)
 //   Canvas CSS size        = round(viewport CSS px)   ← integer to avoid blur
 //   pageDiv CSS size       = same as canvas CSS size
 //
-// Text layer (PDF.js 3.11.x):
-//   PDF.js uses --scale-factor CSS variable to size the layer container and to
-//   compute span font-sizes as calc(var(--scale-factor)*Npx).  Without it, all
-//   font-sizes evaluate to 0, measureText() returns 0, scaleX becomes NaN, and
-//   every span renders at the wrong width — causing visible misalignment with
-//   the canvas.  Setting --scale-factor = viewport.scale fixes all of this.
+// Text layer:
+//   Not rendered (DOM text layer disabled).  The geometry word index built from
+//   page.getTextContent() provides double-click hit-testing without injecting
+//   any visible DOM spans that could corrupt canvas output.
 
 // -- PDF text geometry -------------------------------------------------------
 // Derived from PDF.js textContent + viewport transforms, not from textLayer DOM.
@@ -628,6 +639,176 @@ window.PdfViewerState = {
   showCustomSelection,
 };
 
+// ── Navigation ─────────────────────────────────────────────────────────────
+
+function scrollToPage(pageNum) {
+  const slot = slots[pageNum];
+  if (slot?.pageDiv) {
+    slot.pageDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+async function navigateToDest(dest) {
+  if (!currentPdfDoc || !dest) return;
+  try {
+    const explicitDest = typeof dest === 'string'
+      ? await currentPdfDoc.getDestination(dest)
+      : dest;
+    if (!Array.isArray(explicitDest) || explicitDest.length === 0) return;
+
+    const ref = explicitDest[0];
+    let pageNum;
+    if (ref && typeof ref === 'object' && 'num' in ref) {
+      // PDF reference object — resolve to page index
+      const pageIndex = await currentPdfDoc.getPageIndex(ref);
+      pageNum = pageIndex + 1;
+    } else if (typeof ref === 'number') {
+      pageNum = ref + 1;
+    } else {
+      return;
+    }
+    scrollToPage(pageNum);
+  } catch (err) {
+    console.warn('[pdf-viewer] navigateToDest failed:', err);
+  }
+}
+
+// ── Annotation link overlay ─────────────────────────────────────────────────
+// Renders transparent clickable divs over the canvas for link annotations.
+// Handles GoTo (internal page), Named (named dest), and URI (external link).
+
+async function renderAnnotationLayer(page, slot, viewport, generation) {
+  const annotDiv = slot.annotationLayerDiv;
+  annotDiv.innerHTML = '';
+
+  // Disable pointer events while loading to avoid stale overlays being clicked.
+  annotDiv.style.pointerEvents = 'none';
+
+  const annotations = await page.getAnnotations({ intent: 'display' });
+  if (generation !== currentGeneration) return;
+
+  for (const ann of annotations) {
+    if (ann.subtype !== 'Link') continue;
+
+    // Transform the annotation rect (PDF user space, bottom-left origin) to
+    // CSS pixel coordinates (top-left origin) within the pageDiv.
+    const [pdfX1, pdfY1, pdfX2, pdfY2] = ann.rect;
+    const [vx1, vy1] = applyTransform([pdfX1, pdfY1], viewport.transform);
+    const [vx2, vy2] = applyTransform([pdfX2, pdfY2], viewport.transform);
+
+    const left   = Math.min(vx1, vx2);
+    const top    = Math.min(vy1, vy2);
+    const width  = Math.abs(vx2 - vx1);
+    const height = Math.abs(vy2 - vy1);
+
+    if (width < 1 || height < 1) continue;
+
+    const linkDiv = document.createElement('div');
+    linkDiv.className = 'annotationLink';
+    linkDiv.style.left   = left   + 'px';
+    linkDiv.style.top    = top    + 'px';
+    linkDiv.style.width  = width  + 'px';
+    linkDiv.style.height = height + 'px';
+
+    if (ann.url) {
+      linkDiv.title = ann.url;
+      linkDiv.addEventListener('click', () => {
+        window.open(ann.url, ann.newWindow ? '_blank' : '_self');
+      });
+    } else if (ann.dest != null) {
+      linkDiv.addEventListener('click', () => navigateToDest(ann.dest));
+    } else if (ann.action) {
+      const action = ann.action;
+      if (action.type === 'Named') {
+        // Named actions like NextPage, PrevPage, etc.
+        linkDiv.addEventListener('click', () => handleNamedAction(action.action));
+      } else if (action.type === 'GoTo' && action.dest) {
+        linkDiv.addEventListener('click', () => navigateToDest(action.dest));
+      } else if (action.type === 'GoToR' && action.url) {
+        linkDiv.title = action.url;
+        linkDiv.addEventListener('click', () => window.open(action.url, '_blank'));
+      } else if (action.type === 'URI' && action.url) {
+        linkDiv.title = action.url;
+        linkDiv.addEventListener('click', () => window.open(action.url, '_blank'));
+      }
+    }
+
+    annotDiv.appendChild(linkDiv);
+  }
+
+  annotDiv.style.pointerEvents = '';
+}
+
+function handleNamedAction(name) {
+  if (!currentPdfDoc) return;
+  const n = currentPdfDoc.numPages;
+  // Find the currently visible page (topmost in viewport).
+  let visiblePage = 1;
+  for (let i = 1; i < slots.length; i++) {
+    const slot = slots[i];
+    if (!slot) continue;
+    const rect = slot.pageDiv.getBoundingClientRect();
+    if (rect.top <= window.innerHeight / 2 && rect.bottom >= 0) {
+      visiblePage = i;
+      break;
+    }
+  }
+  switch (name) {
+    case 'NextPage':   scrollToPage(Math.min(visiblePage + 1, n)); break;
+    case 'PrevPage':   scrollToPage(Math.max(visiblePage - 1, 1)); break;
+    case 'FirstPage':  scrollToPage(1); break;
+    case 'LastPage':   scrollToPage(n); break;
+  }
+}
+
+// Applies a 6-element transform matrix [a,b,c,d,e,f] to a point [x,y].
+function applyTransform([x, y], [a, b, c, d, e, f]) {
+  return [a * x + c * y + e, b * x + d * y + f];
+}
+
+// ── Outline / TOC sidebar ──────────────────────────────────────────────────
+
+async function buildOutline(pdfDoc) {
+  if (!outlinePanel || !outlineList) return;
+
+  outlinePanel.classList.add('hidden');
+  outlineList.innerHTML = '';
+
+  let outline;
+  try {
+    outline = await pdfDoc.getOutline();
+  } catch (_) {
+    return;
+  }
+
+  if (!outline || outline.length === 0) return;
+
+  function buildItems(items, ul) {
+    for (const item of items) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.className = 'outline-item';
+      btn.textContent = item.title || '(untitled)';
+      btn.addEventListener('click', () => {
+        if (item.dest != null) navigateToDest(item.dest);
+        else if (item.url)     window.open(item.url, '_blank');
+      });
+      li.appendChild(btn);
+
+      if (item.items && item.items.length > 0) {
+        const subUl = document.createElement('ul');
+        buildItems(item.items, subUl);
+        li.appendChild(subUl);
+      }
+
+      ul.appendChild(li);
+    }
+  }
+
+  buildItems(outline, outlineList);
+  outlinePanel.classList.remove('hidden');
+}
+
 async function renderPageIntoSlot(page, slot, zoom, generation) {
   const outputScale = window.devicePixelRatio || 1;
   const viewport    = page.getViewport({ scale: zoom });
@@ -683,9 +864,8 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
 
   if (generation !== currentGeneration) return;
 
-  // ── Text layer & geometry index ───────────────────────────────────────────
-  // Clear stale spans and geometry from a previous render.
-  slot.textLayerDiv.innerHTML = '';
+  // ── Geometry word index ────────────────────────────────────────────────────
+  // Reset stale state from a previous render.
   slot.textContentItems = [];
   slot.wordBoxes = [];
   slot.textGeometryGeneration = -1;
@@ -699,15 +879,6 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
     slot.geometryDebugLayer = null;
   }
 
-  // --scale-factor is only consumed by PDF.js's calc(var(--scale-factor)*Npx)
-  // span sizing; skip it when the DOM text layer is disabled.
-  if (ENABLE_DOM_TEXT_LAYER) {
-    slot.textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
-  }
-
-  // Always fetch text content — the geometry word index (used by double-click
-  // detection and custom highlights) is built from it regardless of whether
-  // the DOM text layer is rendered.
   try {
     const textContent = await page.getTextContent();
     if (generation !== currentGeneration) return;
@@ -717,21 +888,18 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
     slot.textGeometryGeneration = generation;
     slot.textGeometryZoom = zoom;
     drawGeometryDebug(slot);
-
-    if (ENABLE_DOM_TEXT_LAYER && typeof pdfjsLib.renderTextLayer === 'function') {
-      // Passing the pre-fetched TextContent object forces the synchronous
-      // internal path — all spans are created in one batch with no async gaps,
-      // preventing stale span injection across zoom-change boundaries.
-      const textTask = pdfjsLib.renderTextLayer({
-        textContentSource: textContent,
-        container:         slot.textLayerDiv,
-        viewport,
-      });
-      await textTask.promise;
-    }
   } catch (err) {
     if (!isCancelError(err)) {
-      console.warn(`Text layer error on page ${slot.pageNum}:`, err);
+      console.warn(`getTextContent error on page ${slot.pageNum}:`, err);
+    }
+  }
+
+  // ── Annotation link overlay ────────────────────────────────────────────────
+  try {
+    await renderAnnotationLayer(page, slot, viewport, generation);
+  } catch (err) {
+    if (!isCancelError(err)) {
+      console.warn(`Annotation layer error on page ${slot.pageNum}:`, err);
     }
   }
 
@@ -767,12 +935,20 @@ async function loadPDF(source) {
 
   const loadingTask = pdfjsLib.getDocument({
     ...source,
-    // useSystemFonts lets PDF.js resolve font metrics from the OS rather than
-    // failing silently when standard font data is not bundled — without this,
-    // PDFs whose fonts rely on standard metric tables produce glyph-width
-    // miscalculations that stack characters vertically on the canvas.
-    useSystemFonts: true,
-    disableFontFace: false,
+    // CMap files resolve character encoding for Type1/CIDFont PDFs.
+    // Without them, PDF.js assigns wrong advance widths and characters
+    // render at incorrect positions — the primary cause of vertical-letter
+    // stacking on bullet lists and other encoded text.
+    cMapUrl:             CMAP_URL,
+    cMapPacked:          true,
+    // Standard font data provides correct metrics for the 14 standard Type1
+    // fonts (Helvetica, Times, Courier, Symbol, ZapfDingbats) that conforming
+    // PDFs are allowed to omit.  useSystemFonts must be false when this is set.
+    standardFontDataUrl: STANDARD_FONT_URL,
+    useSystemFonts:      false,
+    disableFontFace:     false,
+    enableXfa:           true,
+    stopAtErrors:        false,
   });
   currentLoadingTask = loadingTask;
 
@@ -792,6 +968,9 @@ async function loadPDF(source) {
   // buildLayout shows the loading bar until placeholder divs are ready,
   // then hides it and fires the observer.
   await buildLayout(pdfDoc, generation);
+  if (generation === currentGeneration) {
+    buildOutline(pdfDoc);
+  }
 }
 
 function clearViewer() {
@@ -810,6 +989,12 @@ function clearViewer() {
   }
   currentPdfDoc = null;
   pdfContainer.innerHTML = '';
+
+  // Hide outline panel when document is unloaded.
+  if (outlinePanel) {
+    outlinePanel.classList.add('hidden');
+    if (outlineList) outlineList.innerHTML = '';
+  }
 }
 
 // ── Error classification ───────────────────────────────────────────────────
@@ -954,9 +1139,8 @@ zoomSelect.addEventListener('change', () => {
       slot.canvas = null;
     }
 
-    // Clear stale text layer spans and the stale --scale-factor.
-    slot.textLayerDiv.innerHTML = '';
-    slot.textLayerDiv.style.removeProperty('--scale-factor');
+    // Clear stale annotation overlays — they will be rebuilt at the new zoom.
+    slot.annotationLayerDiv.innerHTML = '';
   }
 
   // Reconnect with the new generation so old observer callbacks are no-ops.
