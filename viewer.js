@@ -23,6 +23,7 @@ const DEBUG_TEXT_GEOMETRY = false;
 // Set true only if you need browser-native text selection; be aware that
 // mis-styled text spans can corrupt the visual PDF rendering.
 const ENABLE_DOM_TEXT_LAYER = false;
+console.log('[pdf-viewer] DOM text layer enabled:', ENABLE_DOM_TEXT_LAYER);
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -764,7 +765,15 @@ async function loadPDF(source) {
 
   const generation = ++currentGeneration;
 
-  const loadingTask = pdfjsLib.getDocument(source);
+  const loadingTask = pdfjsLib.getDocument({
+    ...source,
+    // useSystemFonts lets PDF.js resolve font metrics from the OS rather than
+    // failing silently when standard font data is not bundled — without this,
+    // PDFs whose fonts rely on standard metric tables produce glyph-width
+    // miscalculations that stack characters vertically on the canvas.
+    useSystemFonts: true,
+    disableFontFace: false,
+  });
   currentLoadingTask = loadingTask;
 
   let pdfDoc;
