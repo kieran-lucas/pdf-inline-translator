@@ -210,13 +210,18 @@
     return groups;
   }
 
+  function getCanonicalParts(entry) {
+    if (Array.isArray(entry?.partsOfSpeech) && entry.partsOfSpeech.length) return entry.partsOfSpeech;
+    return window.DictionaryModel?.canonicalizeEntry?.(entry, entry?.lemma)?.partsOfSpeech || [];
+  }
+
   function renderFooterActions(container, translated, sourceText, result, wordForSave) {
     const footer = document.createElement('div');
     footer.className = 'tx-vc-footer';
 
     const saveBtn = document.createElement('button');
     saveBtn.className   = 'tx-vc-btn tx-vc-save-btn';
-    saveBtn.textContent = '☆ Save';
+    saveBtn.textContent = 'Save';
     saveBtn.title = 'Save to word list';
     const SAVED_KEY = 'saved_words';
 
@@ -224,7 +229,7 @@
       chrome.storage.local.get(SAVED_KEY, (data) => {
         const words = data[SAVED_KEY] || [];
         const saved = words.some(w => w.word === wordForSave);
-        saveBtn.textContent = saved ? '★ Saved' : '☆ Save';
+        saveBtn.textContent = saved ? 'Saved' : 'Save';
         saveBtn.classList.toggle('tx-vc-save-btn--saved', saved);
       });
     }
@@ -330,7 +335,7 @@
         txBody.appendChild(pronEl);
       }
 
-      const groups = groupSensesByPos(entry.senses);
+      const groups = getCanonicalParts(entry);
 
       // Build sections first so tab handlers can close over their section elements
       const sectionsEl = document.createElement('div');
@@ -341,53 +346,57 @@
         const section = document.createElement('div');
         section.className = 'tx-vc-section';
 
-        if (g.displayPos) {
+        if (g.displayLabel) {
           const posLabel = document.createElement('div');
           posLabel.className   = 'tx-vc-pos-label';
-          posLabel.textContent = g.displayPos;
+          posLabel.textContent = g.displayLabel;
           section.appendChild(posLabel);
-          namedSections.push({ pos: g.displayPos, section });
+          namedSections.push({ pos: g.displayLabel, section });
         }
 
-        const allMeanings = [];
-        for (const s of g.senses) {
-          for (const m of (s.viMeanings || [])) {
-            if (m) allMeanings.push(m);
-            if (allMeanings.length >= 5) break;
-          }
-          if (allMeanings.length >= 5) break;
-        }
-
-        if (allMeanings.length) {
+        if (g.senses?.length) {
           const ol = document.createElement('ol');
           ol.className = 'tx-vc-ol';
-          for (const m of allMeanings) {
+          for (const sense of g.senses.slice(0, 8)) {
             const li = document.createElement('li');
-            li.textContent = m;
+            const meaning = document.createElement('div');
+            meaning.className = 'tx-vc-meaning';
+            meaning.textContent = sense.meaningVi;
+            li.appendChild(meaning);
+
+            const usageItems = [];
+            for (const collocation of sense.collocations || []) {
+              if (collocation) usageItems.push(collocation);
+              if (usageItems.length >= 2) break;
+            }
+            if (!usageItems.length) {
+              for (const example of sense.examples || []) {
+                if (example?.textEn) usageItems.push(example.textEn);
+                if (usageItems.length >= 2) break;
+              }
+            }
+            for (const usage of usageItems) {
+              const usageEl = document.createElement('div');
+              usageEl.className = 'tx-vc-usage';
+              usageEl.textContent = usage;
+              li.appendChild(usageEl);
+            }
+
             ol.appendChild(li);
           }
           section.appendChild(ol);
         }
 
-        const firstColls = g.senses.find(s => (s.collocations || []).length > 0);
-        const firstEx    = g.senses.find(s => (s.examples    || []).length > 0);
-        const usageText  = firstColls?.collocations?.[0] || firstEx?.examples?.[0]?.en || null;
-        if (usageText) {
-          const usageEl = document.createElement('div');
-          usageEl.className   = 'tx-vc-usage';
-          usageEl.textContent = usageText;
-          section.appendChild(usageEl);
-        }
-
         if (section.childElementCount > 0) sectionsEl.appendChild(section);
       }
 
-      if (namedSections.length >= 2) {
+      if (namedSections.length >= 1) {
         const tabsEl = document.createElement('div');
         tabsEl.className = 'tx-vc-tabs';
         for (const { pos, section } of namedSections) {
           const tab = document.createElement('button');
           tab.className   = 'tx-vc-tab';
+          tab.type = 'button';
           tab.textContent = pos;
           tab.addEventListener('click', () => {
             section.scrollIntoView({ block: 'nearest', behavior: 'smooth' });

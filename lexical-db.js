@@ -94,7 +94,7 @@ window.LexicalDB = (() => {
   }
 
   function normalizeEntry(entry, fallbackLemma) {
-    return {
+    const legacyEntry = {
       lemma:         entry.lemma         || fallbackLemma,
       language:      entry.language      || 'en',
       frequencyRank: entry.frequencyRank ?? null,
@@ -104,6 +104,17 @@ window.LexicalDB = (() => {
       senses:        Array.isArray(entry.senses)        ? entry.senses        : [],
       source:        entry.source  || {},
       quality:       entry.quality || {},
+    };
+    const canonical = window.DictionaryModel?.canonicalizeEntry?.(legacyEntry, fallbackLemma) || null;
+    return {
+      ...legacyEntry,
+      id:              canonical?.id || legacyEntry.lemma,
+      headword:        canonical?.headword || legacyEntry.lemma,
+      ipa:             canonical?.ipa || null,
+      audio:           canonical?.audio || [],
+      sourceMetadata:  canonical?.sourceMetadata || null,
+      partsOfSpeech:   canonical?.partsOfSpeech || [],
+      rawEntry:        entry,
     };
   }
 
@@ -152,6 +163,7 @@ window.LexicalDB = (() => {
 
   // Returns a hit only when the entry has at least one usable Vietnamese meaning.
   function entryHasVietnamese(entry) {
+    if ((entry?.partsOfSpeech || []).some(p => (p.senses || []).some(s => s.meaningVi))) return true;
     return (entry?.senses || []).some(s => (s.viMeanings || []).length > 0);
   }
 
