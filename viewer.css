@@ -215,42 +215,57 @@ body {
   display: block;
 }
 
-/* ── Text layer (transparent, selectable) ─────────────────────────────────── */
+/* ── Text layer (geometry anchor, visually invisible) ─────────────────────── */
 /*
- * PDF.js 3.11.x positions every span and sizes the layer using the CSS
- * variable --scale-factor (set to viewport.scale by viewer.js at render time).
- * The rules below match the official PDF.js text_layer.css for this version.
+ * ENABLE_DOM_TEXT_LAYER = false (viewer.js): renderTextLayer is skipped, so
+ * this div stays empty. The geometry word index is still built from
+ * getTextContent() for double-click detection and custom highlights.
+ *
+ * If ENABLE_DOM_TEXT_LAYER is ever re-enabled, the hardened rules below
+ * guarantee spans cannot visually corrupt the PDF canvas rendering.
  */
 
 .textLayer {
   position: absolute;
-  /* inset:0 anchors the layer at the page origin; explicit width/height are
-     set by PDF.js's setLayerDimensions() via calc(var(--scale-factor)*Npx). */
   inset: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   opacity: 1;
   line-height: 1;
-  /* Prevent mobile browsers from auto-inflating font sizes, which would
-     misalign text layer spans with the canvas rendering. */
   text-size-adjust: none;
   -webkit-text-size-adjust: none;
-  /* Reset font-family so Lexend does not cascade into the text layer.
-     PDF.js sets inline font-family on every span from the PDF's embedded
-     fonts; 'initial' (browser default) is the correct fallback here. */
   font-family: initial;
-  /* Ensure no inherited transform or zoom shifts the layer origin. */
   transform-origin: 0 0;
+  pointer-events: auto;
+  z-index: 2;
 }
 
 .textLayer span,
 .textLayer br {
-  color: transparent;
+  /* Fully invisible — must never draw readable text over the canvas. */
+  color: transparent !important;
+  background: transparent !important;
+  text-shadow: none !important;
+  opacity: 1;
+
   position: absolute;
-  white-space: pre;
-  cursor: text;
-  /* PDF.js applies scaleX() and rotate() transforms anchored at 0% 0%. */
   transform-origin: 0% 0%;
   user-select: text;
+  cursor: text;
+  display: inline !important;
+
+  /* Prevent any inherited global style from causing vertical/wrapped rendering. */
+  white-space: pre !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+
+  /* Isolate from Lexend and any other app font metrics. */
+  font-family: sans-serif !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
 }
 
 .textLayer .endOfContent {

@@ -16,6 +16,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.m
 const DEBUG_RENDER = false;
 const DEBUG_TEXT_GEOMETRY = false;
 
+// When false, renderTextLayer() is skipped entirely so no DOM text spans are
+// injected over the canvas. The geometry word index (buildTextGeometryIndex)
+// still runs from getTextContent(), so double-click detection and custom
+// highlights are fully preserved. Native drag-to-select is disabled.
+// Set true only if you need browser-native text selection; be aware that
+// mis-styled text spans can corrupt the visual PDF rendering.
+const ENABLE_DOM_TEXT_LAYER = false;
+
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
 const fileInput    = document.getElementById('file-input');
@@ -674,8 +682,8 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
 
   if (generation !== currentGeneration) return;
 
-  // ── Text layer ────────────────────────────────────────────────────────────
-  // Clear stale content from a previous render (different zoom / generation).
+  // ── Text layer & geometry index ───────────────────────────────────────────
+  // Clear stale spans and geometry from a previous render.
   slot.textLayerDiv.innerHTML = '';
   slot.textContentItems = [];
   slot.wordBoxes = [];
@@ -690,39 +698,39 @@ async function renderPageIntoSlot(page, slot, zoom, generation) {
     slot.geometryDebugLayer = null;
   }
 
-  // CRITICAL: PDF.js 3.11.x evaluates span positions and font-sizes as
-  // calc(var(--scale-factor) * Npx).  The constructor of TextLayerRenderTask
-  // also calls setLayerDimensions() which sizes the container via the same
-  // variable.  Set it to viewport.scale (= zoom) before calling renderTextLayer
-  // so the CSS engine resolves all calc() expressions correctly.
-  slot.textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
+  // --scale-factor is only consumed by PDF.js's calc(var(--scale-factor)*Npx)
+  // span sizing; skip it when the DOM text layer is disabled.
+  if (ENABLE_DOM_TEXT_LAYER) {
+    slot.textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
+  }
 
-  if (typeof pdfjsLib.renderTextLayer === 'function') {
-    try {
-      // Await getTextContent() first so renderTextLayer uses the synchronous
-      // (non-stream) internal path: all spans are created and laid out in one
-      // synchronous batch with no async gaps.  Using streamTextContent() instead
-      // would introduce an async race where a zoom change could cause the old
-      // task to append stale spans into the div alongside the new render's spans.
-      const textContent = await page.getTextContent();
-      if (generation !== currentGeneration) return;
+  // Always fetch text content — the geometry word index (used by double-click
+  // detection and custom highlights) is built from it regardless of whether
+  // the DOM text layer is rendered.
+  try {
+    const textContent = await page.getTextContent();
+    if (generation !== currentGeneration) return;
 
-      slot.textContentItems = textContent.items || [];
-      slot.wordBoxes = buildTextGeometryIndex(textContent, viewport, slot.pageNum);
-      slot.textGeometryGeneration = generation;
-      slot.textGeometryZoom = zoom;
-      drawGeometryDebug(slot);
+    slot.textContentItems = textContent.items || [];
+    slot.wordBoxes = buildTextGeometryIndex(textContent, viewport, slot.pageNum);
+    slot.textGeometryGeneration = generation;
+    slot.textGeometryZoom = zoom;
+    drawGeometryDebug(slot);
 
+    if (ENABLE_DOM_TEXT_LAYER && typeof pdfjsLib.renderTextLayer === 'function') {
+      // Passing the pre-fetched TextContent object forces the synchronous
+      // internal path — all spans are created in one batch with no async gaps,
+      // preventing stale span injection across zoom-change boundaries.
       const textTask = pdfjsLib.renderTextLayer({
-        textContentSource: textContent,   // direct TextContent object → sync path
+        textContentSource: textContent,
         container:         slot.textLayerDiv,
         viewport,
       });
       await textTask.promise;
-    } catch (err) {
-      if (!isCancelError(err)) {
-        console.warn(`Text layer error on page ${slot.pageNum}:`, err);
-      }
+    }
+  } catch (err) {
+    if (!isCancelError(err)) {
+      console.warn(`Text layer error on page ${slot.pageNum}:`, err);
     }
   }
 
