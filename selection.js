@@ -129,7 +129,9 @@
     'suffix', 'prefix',
   ];
 
-  function normalizePartOfSpeech(rawPos) {
+  // Legacy fallback kept only for old cached entry shapes. The active pipeline
+  // normalizes POS in dictionary-model.js before rendering.
+  function legacyNormalizePartOfSpeech(rawPos) {
     if (!rawPos) return null;
     const s = rawPos.toLowerCase().trim();
     if (!s) return null;
@@ -180,11 +182,11 @@
 
   // ── Action builder ──────────────────────────────────────────────────────────
 
-  function groupSensesByPos(senses) {
+  function legacyGroupSensesByPos(senses) {
     const groups = [];
     const indexMap = new Map();
     for (const sense of senses || []) {
-      const canonical = normalizePartOfSpeech(sense.pos);
+      const canonical = legacyNormalizePartOfSpeech(sense.pos);
       // Group key: canonical key when known, raw string otherwise (preserves distinct unknowns)
       const key = canonical !== null ? canonical : (sense.pos || '');
       if (indexMap.has(key)) {

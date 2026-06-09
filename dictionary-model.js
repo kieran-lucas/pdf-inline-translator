@@ -48,6 +48,24 @@
     ['determiner', 'determiner'], ['det', 'determiner'], ['det.', 'determiner'], ['tu han dinh', 'determiner'],
   ]);
 
+  const DEBUG_UNKNOWN_POS = false;
+  const LOOSE_POS_PREFIXES = new Set([
+    'danh tu',
+    'dong tu',
+    'ngoai dong tu',
+    'noi dong tu',
+    'tinh tu',
+    'pho tu',
+    'gioi tu',
+    'lien tu',
+    'dai tu',
+    'than tu',
+    'mao tu',
+    'cum tu',
+    'thanh ngu',
+    'tu han dinh',
+  ]);
+
   function stripVietnameseMarks(text) {
     return String(text || '')
       .normalize('NFD')
@@ -71,12 +89,13 @@
     const normalized = stripVietnameseMarks(rawValue)
       .toLowerCase()
       .replace(/[()]/g, ' ')
-      .replace(/[,;:/]+/g, ' ')
+      .replace(/[+,;:/]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
     for (const [variant, canonicalPos] of POS_VARIANTS.entries()) {
-      if (normalized === variant || normalized.startsWith(variant + ' ') || normalized.includes(' ' + variant + ' ')) {
+      const loosePrefix = LOOSE_POS_PREFIXES.has(variant) && normalized.startsWith(variant);
+      if (normalized === variant || normalized.startsWith(variant + ' ') || normalized.includes(' ' + variant + ' ') || loosePrefix) {
         return { canonicalPos, displayLabel: POS_LABELS[canonicalPos], rawValue, isKnown: true };
       }
     }
@@ -136,11 +155,67 @@
 
   function canonicalizeEntry(rawEntry, fallbackLemma, sourceId) {
     const headword = cleanText(rawEntry?.headword || rawEntry?.lemma || fallbackLemma, 120);
+    if (Array.isArray(rawEntry?.partsOfSpeech) && rawEntry.partsOfSpeech.length) {
+      const partsOfSpeech = [];
+      const byPos = new Map();
+      for (const rawPart of rawEntry.partsOfSpeech) {
+        const posInfo = normalizePartOfSpeech(rawPart?.canonicalPos || rawPart?.displayLabel);
+        if (!byPos.has(posInfo.canonicalPos)) {
+          byPos.set(posInfo.canonicalPos, {
+            canonicalPos: posInfo.canonicalPos,
+            displayLabel: POS_LABELS[posInfo.canonicalPos],
+            rawPosValues: [],
+            senses: [],
+          });
+        }
+        const part = byPos.get(posInfo.canonicalPos);
+        for (const rawValue of rawPart.rawPosValues || []) uniquePush(part.rawPosValues, cleanText(rawValue, 120));
+        uniquePush(part.rawPosValues, posInfo.rawValue);
+        for (const rawSense of rawPart.senses || []) {
+          const meaningVi = cleanText(rawSense?.meaningVi, 260);
+          if (!meaningVi) continue;
+          const senseId = rawSense.id || headword + ':' + posInfo.canonicalPos + ':' + (part.senses.length + 1);
+          part.senses.push({
+            id: senseId,
+            order: part.senses.length + 1,
+            meaningVi,
+            definitionEn: cleanText(rawSense.definitionEn, 260) || null,
+            examples: normalizeExamples(rawSense.examples, senseId, true),
+            collocations: (rawSense.collocations || []).map(c => cleanText(c, 140)).filter(Boolean).slice(0, 3),
+            domain: rawSense.domain || null,
+            register: rawSense.register || null,
+            rawSourceReference: rawSense.rawSourceReference || null,
+          });
+        }
+      }
+      partsOfSpeech.push(...Array.from(byPos.values())
+        .filter(part => part.senses.length > 0)
+        .sort((a, b) => POS_ORDER.indexOf(a.canonicalPos) - POS_ORDER.indexOf(b.canonicalPos)));
+
+      return {
+        id: rawEntry.id || headword,
+        headword,
+        language: rawEntry.language || 'en',
+        ipa: rawEntry.ipa || (rawEntry.pronunciations || []).find(p => p?.ipa)?.ipa || null,
+        pronunciations: Array.isArray(rawEntry.pronunciations) ? rawEntry.pronunciations : [],
+        audio: Array.isArray(rawEntry.audio) ? rawEntry.audio : (rawEntry.pronunciations || []).filter(p => p?.audio),
+        sourceMetadata: makeSourceMetadata(rawEntry, sourceId),
+        partsOfSpeech,
+        rawEntry,
+      };
+    }
+
     const partsByPos = new Map();
     const duplicateSenseKeys = new Set();
+    const entryLevelPos = [];
+    for (const rawPos of rawEntry?.pos || []) {
+      const posInfo = normalizePartOfSpeech(rawPos);
+      if (posInfo.isKnown && !entryLevelPos.includes(posInfo.canonicalPos)) entryLevelPos.push(posInfo.canonicalPos);
+    }
+    const singleEntryLevelPos = entryLevelPos.length === 1 ? entryLevelPos[0] : null;
 
     for (const rawSense of rawEntry?.senses || []) {
-      const posInfo = normalizePartOfSpeech(rawSense?.canonicalPos || rawSense?.pos);
+      const posInfo = normalizePartOfSpeech(rawSense?.canonicalPos || rawSense?.pos || singleEntryLevelPos);
       const key = posInfo.canonicalPos;
       if (!partsByPos.has(key)) {
         partsByPos.set(key, {
@@ -188,7 +263,7 @@
       .filter(part => part.senses.length > 0)
       .sort((a, b) => POS_ORDER.indexOf(a.canonicalPos) - POS_ORDER.indexOf(b.canonicalPos));
 
-    if (typeof console !== 'undefined') {
+    if (DEBUG_UNKNOWN_POS && typeof console !== 'undefined') {
       for (const part of partsOfSpeech) {
         if (part.canonicalPos === 'unknown' && part.rawPosValues.length && root?.location?.protocol !== 'chrome-extension:') {
           console.debug('[DictionaryModel] Unknown POS:', part.rawPosValues);

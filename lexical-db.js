@@ -104,6 +104,11 @@ window.LexicalDB = (() => {
       senses:        Array.isArray(entry.senses)        ? entry.senses        : [],
       source:        entry.source  || {},
       quality:       entry.quality || {},
+      headword:      entry.headword || entry.lemma || fallbackLemma,
+      ipa:           entry.ipa || null,
+      audio:         Array.isArray(entry.audio) ? entry.audio : [],
+      sourceMetadata: entry.sourceMetadata || null,
+      partsOfSpeech: Array.isArray(entry.partsOfSpeech) ? entry.partsOfSpeech : [],
     };
     const canonical = window.DictionaryModel?.canonicalizeEntry?.(legacyEntry, fallbackLemma) || null;
     return {

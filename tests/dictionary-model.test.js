@@ -18,6 +18,10 @@ assert.strictEqual(pos('adj.'), 'adjective');
 assert.strictEqual(pos('pho tu'), 'adverb');
 assert.strictEqual(pos('danh tu'), 'noun');
 assert.strictEqual(pos('dong tu'), 'verb');
+assert.strictEqual(pos('danh từ+ (adherer)'), 'noun');
+assert.strictEqual(pos('tính từ+ (cozy)'), 'adjective');
+assert.strictEqual(pos('ngoại động từstymied'), 'verb');
+assert.strictEqual(pos('tính từghép'), 'adjective');
 assert.strictEqual(pos('prep.'), 'preposition');
 assert.strictEqual(pos('conj'), 'conjunction');
 assert.strictEqual(pos('pron.'), 'pronoun');
@@ -72,6 +76,46 @@ const flat = canonicalizeEntry({
   senses: [{ pos: 'noun', viMeanings: ['one flat meaning; with semicolon preserved'] }],
 }, 'flat');
 assert.strictEqual(flat.partsOfSpeech[0].senses[0].meaningVi, 'one flat meaning; with semicolon preserved');
+
+const singleEntryPosFallback = canonicalizeEntry({
+  lemma: 'fallbackpos',
+  pos: ['verb'],
+  senses: [{ pos: null, viMeanings: ['nghia khong co pos rieng'] }],
+}, 'fallbackpos');
+assert.strictEqual(singleEntryPosFallback.partsOfSpeech[0].canonicalPos, 'verb');
+
+const multiEntryPosFallback = canonicalizeEntry({
+  lemma: 'ambiguouspos',
+  pos: ['noun', 'verb'],
+  senses: [{ pos: null, viMeanings: ['nghia mo ho pos'] }],
+}, 'ambiguouspos');
+assert.strictEqual(multiEntryPosFallback.partsOfSpeech[0].canonicalPos, 'unknown');
+
+const alreadyCanonical = canonicalizeEntry({
+  id: 'canonical',
+  headword: 'canonical',
+  sourceMetadata: {
+    sourceId: 'generated-fixture',
+    sourceName: 'Generated fixture',
+    sourceType: 'ai_generated',
+    modelName: 'test-model',
+    generatedAt: '2026-06-09T00:00:00.000Z',
+    reviewStatus: 'unreviewed',
+    confidence: 0.4,
+  },
+  partsOfSpeech: [{
+    canonicalPos: 'adjactive',
+    rawPosValues: ['adjactive'],
+    senses: [{
+      id: 'canonical:adjective:1',
+      meaningVi: 'co tinh chat mau',
+      examples: [{ textEn: 'canonical example', translationVi: 'vi du canonical', sourceType: 'ai_generated' }],
+    }],
+  }],
+}, 'canonical');
+assert.strictEqual(alreadyCanonical.sourceMetadata.sourceType, 'ai_generated');
+assert.strictEqual(alreadyCanonical.partsOfSpeech[0].canonicalPos, 'adjective');
+assert.strictEqual(alreadyCanonical.partsOfSpeech[0].senses[0].examples[0].sourceType, 'ai_generated');
 
 for (const word of ['wild', 'reduce', 'light', 'record']) {
   const entry = canonicalizeEntry(core.entries[word], word);
